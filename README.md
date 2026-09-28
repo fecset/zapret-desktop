@@ -1,4 +1,4 @@
-# Zapret Desktop ![Значок Zapret Desktop](src/Zapret.Desktop/Assets/app.png)
+# ![Значок Zapret Desktop](src/Zapret.Desktop/Assets/app.png) Zapret Desktop 
 
 **Декстопное приложение для управления Zapret на Windows.** Выбирайте стратегию, смотрите состояние процесса и службы, редактируйте списки и читайте логи в одном приложении.
 
