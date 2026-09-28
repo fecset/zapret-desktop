@@ -1,62 +1,68 @@
-# Zapret Desktop architecture and upstream map
+# Архитектура Zapret Desktop и связь с исходным проектом
 
-## Source of truth
+## Исходные компоненты
 
-The bundled `zapret/` directory is a Flowseal distribution with `service.bat`
-version 1.10.3, 22 `general*.bat` strategies, `bin/`, `lists/`, and
-`utils/test zapret.ps1`. This local copy omits the upstream `README.md`,
-`.service/`, and `LICENSE.txt`; their current upstream versions were inspected
-at <https://github.com/Flowseal/zapret-discord-youtube>. The executable and
-driver remain upstream components. Desktop must never reinterpret their DPI
-semantics.
+Каталог `zapret/`, включённый в поставку, содержит дистрибутив Flowseal: `service.bat`
+версии 1.10.3, 22 стратегии `general*.bat`, каталоги `bin/` и `lists/`, а также
+`utils/test zapret.ps1`. В локальной копии отсутствуют `README.md`, `.service/` и
+`LICENSE.txt` исходного проекта; их актуальные версии были изучены в
+<https://github.com/Flowseal/zapret-discord-youtube>. Исполняемый файл и драйвер
+остаются компонентами исходного проекта. Desktop не должен переопределять их
+логику обхода DPI.
 
-| Existing feature | Source | Desktop implementation |
+| Существующая возможность | Источник | Реализация в Desktop |
 | --- | --- | --- |
-| Manual strategy launch | `general*.bat` | Discover and parse the `winws.exe` invocation into argument tokens; launch `bin/winws.exe` with `ArgumentList` and the `bin` working directory. Reject unknown batch constructs. |
-| Strategy selection/service install | `service.bat :service_install` | Reuse the parsed strategy for `zapret` service installation; persist the selected source name in the existing registry value. |
-| Process/service status | `:status_zapret`, `:service_status` | Query the OS on each refresh. Distinguish a Desktop-owned process, an external `winws`, and the `zapret` service. Never terminate an external instance as a side effect of normal Stop. |
-| Game Filter | `:game_switch_status`, `:game_switch` | Read/write `utils/game_filter.enabled`. Actual modes are `disabled`, `all`, `tcp`, `udp`. Disabled injects port `12`; default enabled range is `1024-65535`; preserve custom TCP/UDP ranges. Requires strategy restart. |
-| IPSet Filter | `:ipset_switch_status`, `:ipset_switch` | Read/write `lists/ipset-all.txt` and `.backup`. Actual states are `loaded` (real list), `none` (sentinel `203.0.113.113/32`), `any` (empty file). A missing backup prevents restoring loaded mode. |
-| User lists | `:load_user_lists`, `lists/*-user.txt` | Create missing upstream-compatible user files and edit them using atomic replacement. Keep large upstream lists streamed/paged. |
-| Tests/auto selection | `service.bat :run_tests`, `utils/test zapret.ps1`, `utils/targets.txt` | Adapter to the PowerShell test script, with progress output and cancellation. Its interactive prompts and global process termination require guarding before fully automated use. Never silently choose a strategy. |
-| Diagnostics | `:service_diagnostics` | Read-only checks for files, BFE, WinDivert, proxies, path, conflicts, DNS, hosts, and services. Destructive repair actions from the batch script require separate explicit UI actions. |
-| Update check | `:service_check_updates`, `.service/version.txt` | Separate Desktop and upstream release checks. Local version falls back to `LOCAL_VERSION` in `service.bat` when `.service/version.txt` is absent. |
-| Replace active fakes | `:replace_active_fakes`, `bin/ACTIVE_*.bin` | Select only bundled `.bin` files and atomically replace the active payload; compare hashes for display. |
-| IPSet/hosts updates | `:ipset_update`, `:hosts_update` | Download only from fixed upstream URLs. Validate and atomically replace IPSet; hosts update is review-only because it changes a system file. |
-| Startup/update flags | `utils/check_updates.enabled`, service auto start | Desktop JSON settings control Desktop startup. `zapret` service startup is a separate Windows service setting. |
+| Ручной запуск стратегии | `general*.bat` | Найти вызов `winws.exe`, разобрать его на аргументы и запустить `bin/winws.exe` через `ArgumentList`, указав `bin` как рабочий каталог. Неизвестные конструкции BAT-файла отклонять. |
+| Выбор стратегии и установка службы | `service.bat :service_install` | Использовать разобранную стратегию при установке службы `zapret`; сохранять имя выбранного исходного файла в существующем значении реестра. |
+| Состояние процесса и службы | `:status_zapret`, `:service_status` | При каждом обновлении запрашивать состояние у ОС. Различать процесс, запущенный Desktop, сторонний `winws` и службу `zapret`. Обычная остановка не должна завершать сторонний процесс. |
+| Игровой фильтр | `:game_switch_status`, `:game_switch` | Читать и записывать `utils/game_filter.enabled`. Фактические режимы: `disabled`, `all`, `tcp`, `udp`. В режиме `disabled` подставляется порт `12`; диапазон по умолчанию при включённом фильтре — `1024-65535`. Пользовательские диапазоны TCP/UDP нужно сохранять. Требуется перезапуск стратегии. |
+| Фильтр IPSet | `:ipset_switch_status`, `:ipset_switch` | Читать и записывать `lists/ipset-all.txt` и `.backup`. Фактические состояния: `loaded` (настоящий список), `none` (маркер `203.0.113.113/32`), `any` (пустой файл). Без резервной копии восстановить режим `loaded` нельзя. |
+| Пользовательские списки | `:load_user_lists`, `lists/*-user.txt` | Создавать отсутствующие пользовательские файлы в формате исходного проекта и изменять их атомарной заменой. Большие списки исходного проекта обрабатывать потоково или постранично. |
+| Тесты и автоматический подбор | `service.bat :run_tests`, `utils/test zapret.ps1`, `utils/targets.txt` | Адаптер для сценария PowerShell с выводом хода выполнения и возможностью отмены. Перед полностью автоматическим использованием нужно защититься от его интерактивных запросов и завершения всех процессов `winws`. Никогда не выбирать стратегию без ведома пользователя. |
+| Диагностика | `:service_diagnostics` | Проверки только для чтения: файлы, BFE, WinDivert, прокси, путь, конфликты, DNS, hosts и службы. Исправления из BAT-файла, способные удалить или изменить данные, должны быть отдельными явными действиями в интерфейсе. |
+| Проверка обновлений | `:service_check_updates`, `.service/version.txt` | Раздельно проверять выпуски Desktop и исходного проекта. Если `.service/version.txt` отсутствует, брать локальную версию из `LOCAL_VERSION` в `service.bat`. |
+| Замена активных фейковых пакетов | `:replace_active_fakes`, `bin/ACTIVE_*.bin` | Предлагать только `.bin`-файлы из поставки и заменять активный файл атомарно; показывать сравнение хешей. |
+| Обновление IPSet и hosts | `:ipset_update`, `:hosts_update` | Скачивать данные только по фиксированным URL исходного проекта. Проверять IPSet и заменять его атомарно. Обновление hosts допускается только после просмотра пользователем, поскольку оно меняет системный файл. |
+| Параметры запуска и обновлений | `utils/check_updates.enabled`, автоматический запуск службы | Запуском Desktop управляют настройки Desktop в JSON. Автоматический запуск службы `zapret` — отдельный параметр службы Windows. |
 
-`Zapret.Core` defines models and boundaries. `Zapret.Infrastructure` owns file,
-process, service, registry, privilege, HTTP, and script adapters.
-`Zapret.Desktop` owns Avalonia views and view models. A distribution abstraction
-locates the local upstream root and validates assets; UI never assumes a fixed
-number of strategies.
+`Zapret.Core` определяет модели и границы компонентов. `Zapret.Infrastructure`
+содержит адаптеры для файлов, процессов, служб, реестра, привилегий, HTTP и
+сценариев. `Zapret.Desktop` содержит представления и модели представлений
+Avalonia. Отдельная абстракция дистрибутива находит локальный корневой каталог
+исходного проекта и проверяет его файлы; интерфейс не должен исходить из
+фиксированного количества стратегий.
 
-## Important compatibility and safety constraints
+## Важные ограничения совместимости и безопасности
 
-- Batch strategies use `%BIN%`, `%LISTS%`, `%GameFilterTCP%`, `%GameFilterUDP%`,
-  caret line continuation, and sometimes escaped `^!`. Parsing must preserve
-  token boundaries and reject unrecognized variable expansions or commands.
-- `service.bat` installs `zapret` using `sc create` with `start= auto`, then
-  writes `HKLM\System\CurrentControlSet\Services\zapret\zapret-discord-youtube`.
-  Removal also kills every `winws.exe` and removes WinDivert services; Desktop
-  must scope destructive operations more narrowly and disclose that difference.
-- The PowerShell tester mutates `ipset-all.txt`, launches BAT files, kills all
-  `winws` instances, and waits for keyboard input. It cannot safely run beside
-  an unrelated instance or active service. An adapter needs exclusive control
-  and recovery of the IPSet backup after cancellation.
-- Upstream `:service_diagnostics` can delete conflicting services and Discord
-  caches after prompts. Desktop diagnostics should report findings without
-  performing those actions.
-- Do not bundle binary components in a release until Flowseal/bol-van MIT
-  notices and WinDivert LGPLv3/GPLv2 obligations have been reviewed and included.
+- В BAT-файлах стратегий используются `%BIN%`, `%LISTS%`, `%GameFilterTCP%`,
+  `%GameFilterUDP%`, продолжение строки через `^` и иногда экранированное `^!`.
+  Парсер должен сохранять границы аргументов и отклонять неизвестные подстановки
+  переменных или команды.
+- `service.bat` устанавливает службу `zapret` командой `sc create` с параметром
+  `start= auto`, затем записывает
+  `HKLM\System\CurrentControlSet\Services\zapret\zapret-discord-youtube`.
+  При удалении он также завершает все процессы `winws.exe` и удаляет службы
+  WinDivert. Desktop должен ограничивать область таких действий и сообщать
+  пользователю об этом отличии.
+- Тестовый сценарий PowerShell изменяет `ipset-all.txt`, запускает BAT-файлы,
+  завершает все экземпляры `winws` и ждёт ввода с клавиатуры. Его нельзя
+  безопасно запускать одновременно со сторонним экземпляром или работающей
+  службой. Адаптеру нужны исключительный контроль и восстановление резервной
+  копии IPSet после отмены.
+- Диагностика `:service_diagnostics` исходного проекта после подтверждений может
+  удалить конфликтующие службы и кеш Discord. Диагностика Desktop должна
+  сообщать о найденных проблемах, не выполняя этих действий.
+- Не включать бинарные компоненты в релиз, пока не будут проверены и добавлены
+  уведомления о лицензиях MIT для Flowseal/bol-van и выполнены требования
+  LGPLv3/GPLv2 для WinDivert.
 
-## Delivery order
+## Порядок реализации
 
-1. Verify discovery, strict parser, argument construction, settings and state
-   transitions with unit tests.
-2. Implement process/service controllers and read-only diagnostics; test on
-   Windows with elevation where required.
-3. Wire the UI to those services, then add lists, filter controls, tests, tray,
-   updates, and log export.
-4. Validate both manual launch and service operation on a Windows 10/11 x64
-   machine before claiming end-to-end support.
+1. Проверить поиск стратегий, строгий парсер, формирование аргументов, настройки
+   и переходы состояний модульными тестами.
+2. Реализовать управление процессом и службой, а также диагностику только для
+   чтения; проверить на Windows с повышенными правами там, где они необходимы.
+3. Подключить интерфейс к этим службам, затем добавить списки, управление
+   фильтрами, тесты, значок в трее, обновления и экспорт журналов.
+4. Проверить ручной запуск и работу службы на компьютере с Windows 10/11 x64,
+   прежде чем заявлять о полной поддержке сценария.
