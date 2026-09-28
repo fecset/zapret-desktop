@@ -55,6 +55,6 @@ dotnet test ZapretDesktop.slnx -c Release
 
 Для локального запуска используйте `dotnet run --project src/Zapret.Desktop/Zapret.Desktop.csproj`. Устройство решения кратко описано в [ARCHITECTURE.md](ARCHITECTURE.md).
 
-## ⚖️ Происхождение и лицензии
+## ⚖️ Лицензирование
 
 Код Zapret Desktop © fecset, [MIT](LICENSE). Авторы исходных проектов — [bol-van](https://github.com/bol-van/zapret) и [Flowseal](https://github.com/Flowseal/zapret-discord-youtube); их уведомление находится в [`zapret/LICENSE.txt`](zapret/LICENSE.txt). WinDivert распространяется по LGPLv3 или GPLv2 на выбор — [текст лицензии](licenses/WinDivert-LICENSE.txt). Сведения об Avalonia, .NET и иконках собраны в [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md). Лицензия интерфейса не меняет условия использования включённых компонентов.
