@@ -256,7 +256,7 @@ public sealed class MainViewModel(IZapretDistribution distribution, IStrategyPro
     }
     public void ClearLogs() { Logs.Clear(); FilteredLogs.Clear(); }
     public string BuildDiagnosticReport() =>
-        "Zapret Desktop 0.1.0 | upstream " + UpstreamVersion + Environment.NewLine +
+        "Zapret Desktop 0.1.1 | upstream " + UpstreamVersion + Environment.NewLine +
         string.Join(Environment.NewLine, Diagnostics.Select(x => $"{(x.Passed ? "OK" : "FAIL")} {x.Name}: {x.Detail} — {x.Solution}"));
     public async Task SaveLogsAsync(Stream stream, CancellationToken cancellationToken = default)
     {

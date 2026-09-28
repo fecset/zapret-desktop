@@ -118,17 +118,39 @@ public sealed class App : Application
                 choice.IsChecked = item.Id == vm.SelectedStrategy?.Id;
         }
         vm.PropertyChanged += (_, _) => Dispatcher.UIThread.Post(UpdateTray);
-        vm.Strategies.CollectionChanged += (_, _) =>
+        void AddStrategyChoice(ZapretStrategy item)
         {
-            choices.Items.Clear();
-            strategyChoices.Clear();
-            foreach (var item in vm.Strategies)
+            if (strategyChoices.Any(x => x.Strategy.Id == item.Id)) return;
+            var choice = new NativeMenuItem { Header = item.DisplayName,
+                ToggleType = MenuItemToggleType.Radio };
+            choice.Click += async (_, _) => await vm.SelectAsync(item);
+            choices.Items.Add(choice);
+            strategyChoices.Add((item, choice));
+        }
+        foreach (var item in vm.Strategies) AddStrategyChoice(item);
+        vm.Strategies.CollectionChanged += (_, e) =>
+        {
+            if (e.Action == System.Collections.Specialized.NotifyCollectionChangedAction.Reset)
             {
-                var choice = new NativeMenuItem { Header = item.DisplayName,
-                    ToggleType = MenuItemToggleType.Radio };
-                choice.Click += async (_, _) => await vm.SelectAsync(item);
-                choices.Items.Add(choice);
-                strategyChoices.Add((item, choice));
+                choices = new NativeMenu();
+                choose.Menu = choices;
+                strategyChoices.Clear();
+                foreach (var item in vm.Strategies) AddStrategyChoice(item);
+            }
+            else
+            {
+                if (e.OldItems is not null)
+                {
+                    foreach (ZapretStrategy item in e.OldItems)
+                    {
+                        var existing = strategyChoices.FirstOrDefault(x => x.Strategy.Id == item.Id);
+                        if (existing.Item is null) continue;
+                        choices.Items.Remove(existing.Item);
+                        strategyChoices.Remove(existing);
+                    }
+                }
+                if (e.NewItems is not null)
+                    foreach (ZapretStrategy item in e.NewItems) AddStrategyChoice(item);
             }
             UpdateTray();
         };
