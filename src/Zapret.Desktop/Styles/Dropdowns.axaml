@@ -1,0 +1,33 @@
+<Styles xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+  <Style Selector="ComboBox">
+    <Setter Property="MinHeight" Value="40" />
+    <Setter Property="Padding" Value="12,7" />
+    <Setter Property="CornerRadius" Value="8" />
+    <Setter Property="BorderThickness" Value="1" />
+    <Setter Property="FontSize" Value="14" />
+  </Style>
+  <Style Selector="ComboBox:pointerover">
+    <Setter Property="BorderBrush" Value="#8B6CF6" />
+  </Style>
+  <Style Selector="ComboBox:focus">
+    <Setter Property="BorderBrush" Value="#8B6CF6" />
+  </Style>
+  <Style Selector="ComboBox /template/ Popup#PART_Popup">
+    <Setter Property="MaxHeight" Value="360" />
+  </Style>
+  <Style Selector="ComboBoxItem">
+    <Setter Property="MinHeight" Value="38" />
+    <Setter Property="Padding" Value="11,7" />
+    <Setter Property="Margin" Value="3,2" />
+    <Setter Property="CornerRadius" Value="6" />
+  </Style>
+  <Style Selector="ComboBoxItem:pointerover">
+    <Setter Property="Background" Value="#473566" />
+    <Setter Property="Foreground" Value="White" />
+  </Style>
+  <Style Selector="ComboBoxItem:selected">
+    <Setter Property="Background" Value="#8B6CF6" />
+    <Setter Property="Foreground" Value="White" />
+  </Style>
+</Styles>
