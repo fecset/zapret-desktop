@@ -61,8 +61,6 @@ dotnet test ZapretDesktop.slnx -c Release
 
 Для релизной сборки выполните `dotnet publish src/Zapret.Desktop/Zapret.Desktop.csproj -p:PublishProfile=WinX64 -o dist/ZapretDesktop-win-x64`. Профиль объединяет .NET и Avalonia в `Zapret.Desktop.exe`; папка `zapret` остаётся рядом с ним, поскольку приложение запускает `winws.exe`, использует драйвер и позволяет изменять списки.
 
-Для релизной сборки выполните `dotnet publish src/Zapret.Desktop/Zapret.Desktop.csproj -p:PublishProfile=WinX64 -o dist/ZapretDesktop-win-x64`. Профиль объединяет .NET и Avalonia в `Zapret.Desktop.exe`; папка `zapret` остаётся рядом с ним, поскольку приложение запускает `winws.exe`, использует драйвер и позволяет изменять списки.
-
 ## ⚖️ Лицензирование
 
 Код Zapret Desktop © fecset, [MIT](LICENSE). Авторы исходных проектов — [bol-van](https://github.com/bol-van/zapret) и [Flowseal](https://github.com/Flowseal/zapret-discord-youtube); их уведомление находится в [`zapret/LICENSE.txt`](zapret/LICENSE.txt). WinDivert распространяется по LGPLv3 или GPLv2 на выбор — [текст лицензии](licenses/WinDivert-LICENSE.txt). Сведения об Avalonia, .NET и иконках собраны в [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md). Лицензия интерфейса не меняет условия использования включённых компонентов.
