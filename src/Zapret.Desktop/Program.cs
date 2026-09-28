@@ -78,7 +78,7 @@ internal static class Program
             var executable = Environment.ProcessPath ?? throw new InvalidOperationException("Не удалось найти исполняемый файл приложения.");
             var start = new ProcessStartInfo(executable) { UseShellExecute = true, Verb = "runas" };
             if (Path.GetFileName(executable).Equals("dotnet.exe", StringComparison.OrdinalIgnoreCase))
-                start.ArgumentList.Add(System.Reflection.Assembly.GetEntryAssembly()?.Location ?? throw new InvalidOperationException("Не удалось найти сборку приложения."));
+                start.ArgumentList.Add(Path.Combine(AppContext.BaseDirectory, "Zapret.Desktop.dll"));
             Process.Start(start);
         }
         catch (Win32Exception ex) when (ex.NativeErrorCode == 1223) { }
