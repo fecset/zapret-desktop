@@ -6,6 +6,10 @@
 
 Zapret Desktop — проект [fecset](https://github.com/fecset/zapret-desktop). Сетевой движок и стратегии взяты из [Windows-дистрибутива Flowseal](https://github.com/Flowseal/zapret-discord-youtube), основанного на [zapret от bol-van](https://github.com/bol-van/zapret). Интерфейс не заменяет эти компоненты: он управляет их запуском и показывает результат.
 
+## 🖥️ Интерфейс
+
+![Главная страница Zapret Desktop](UI.png)
+
 ## ▶️ Первый запуск
 
 1. Откройте [Releases](https://github.com/fecset/zapret-desktop/releases) и скачайте архив для Windows x64.
