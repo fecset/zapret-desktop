@@ -1,0 +1,17 @@
+.vs/
+dist/
+src/**/bin/
+src/**/obj/
+tests/**/bin/
+tests/**/obj/
+*.user
+*.suo
+*.tmp
+*.log
+
+# Локальные данные и скачанные дополнения к дистрибутиву zapret.
+zapret/lists/*.backup
+zapret/lists/*.test-backup.txt
+zapret/TgWsProxy_windows.exe
+zapret/utils/check_updates.enabled
+zapret/utils/game_filter.enabled
