@@ -86,7 +86,7 @@ public sealed partial class MainWindow
         Grid.SetColumn(choose, 1);
         quick.Children.Add(choose);
         page.Children.Add(quick);
-        page.Children.Add(Text($"Zapret {vm.UpstreamVersion}  ·  Zapret Desktop 0.1.0  ·  {vm.Status?.StartedAt?.ToLocalTime().ToString("g") ?? "не запущен"}", 11, color: MutedBrush));
+        page.Children.Add(Text($"Zapret {vm.UpstreamVersion}  ·  Zapret Desktop 0.1.1  ·  {vm.Status?.StartedAt?.ToLocalTime().ToString("g") ?? "не запущен"}", 11, color: MutedBrush));
     }
 
     private void AddMetric(Grid grid, int column, string label, string value, string detail, IBrush statusColor)

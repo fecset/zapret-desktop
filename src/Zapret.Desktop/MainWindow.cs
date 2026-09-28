@@ -31,6 +31,7 @@ public sealed partial class MainWindow : Window
     private string currentPage = "Главная";
     private bool exitAllowed;
     private bool exitInProgress;
+    private bool openedOnce;
 
     private bool IsLight => vm.Settings.Theme == "Light" ||
         vm.Settings.Theme == "System" && Application.Current?.ActualThemeVariant == ThemeVariant.Light;
@@ -65,6 +66,8 @@ public sealed partial class MainWindow : Window
         vm.PropertyChanged += OnViewModelChanged;
         Opened += async (_, _) =>
         {
+            if (openedOnce) return;
+            openedOnce = true;
             try { await vm.InitializeAsync(); }
             catch (Exception ex) { vm.Log("ERROR", ex.ToString()); }
             ApplyTheme();
@@ -161,7 +164,7 @@ public sealed partial class MainWindow : Window
         sidebarStatus = new TextBlock { Text = vm.StatusText, Foreground = TextBrush, FontSize = 13 };
         online.Children.Add(sidebarStatus);
         sideFoot.Children.Add(online);
-        sideFoot.Children.Add(new TextBlock { Text = "Zapret Desktop 0.1.0", Foreground = MutedBrush, FontSize = 12 });
+        sideFoot.Children.Add(new TextBlock { Text = "Zapret Desktop 0.1.1", Foreground = MutedBrush, FontSize = 12 });
         sideFoot.Children.Add(new TextBlock { Text = "Автор: fecset · Основа: bol-van, Flowseal", Foreground = MutedBrush, FontSize = 11,
             TextWrapping = TextWrapping.Wrap });
         Grid.SetRow(sideFoot, 2);
