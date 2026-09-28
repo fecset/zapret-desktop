@@ -75,7 +75,7 @@ dotnet publish src/Zapret.Desktop/Zapret.Desktop.csproj -p:PublishProfile=WinX64
 Compress-Archive -Path dist/ZapretDesktop-win-x64/* -DestinationPath dist/ZapretDesktop-win-x64.zip -Force
 ```
 
-Полученный ZIP можно прикрепить к выпуску GitHub. Сам каталог `dist/` не хранится в Git.
+В поле **Assets** нового GitHub Release загрузите именно `dist/ZapretDesktop-win-x64.zip`. Файлы `src/`, `tests/`, `.vs/` и отдельный `Zapret.Desktop.exe` туда добавлять не нужно: нужный EXE уже лежит внутри ZIP вместе с зависимостями. GitHub также создаёт архив исходного кода из коммита релиза. Сам каталог `dist/` не хранится в Git.
 
 ## ⚖️ Происхождение и лицензии
 

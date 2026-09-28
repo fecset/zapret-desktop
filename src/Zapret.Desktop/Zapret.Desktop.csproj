@@ -20,7 +20,9 @@
     <None Include="../../LICENSE" Link="LICENSE" CopyToOutputDirectory="PreserveNewest" />
     <None Include="../../THIRD_PARTY_NOTICES.md" Link="THIRD_PARTY_NOTICES.md" CopyToOutputDirectory="PreserveNewest" />
     <None Include="../../licenses/**" Link="licenses/%(RecursiveDir)%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" />
-    <None Include="../../zapret/**" Link="zapret/%(RecursiveDir)%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" />
+    <None Include="../../zapret/**"
+          Exclude="../../zapret/TgWsProxy_windows.exe;../../zapret/lists/*.backup;../../zapret/lists/*.test-backup.txt;../../zapret/utils/*.enabled"
+          Link="zapret/%(RecursiveDir)%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" />
     <ProjectReference Include="../Zapret.Core/Zapret.Core.csproj" />
     <ProjectReference Include="../Zapret.Infrastructure/Zapret.Infrastructure.csproj" />
     <PackageReference Include="Avalonia" Version="12.1.3" />
