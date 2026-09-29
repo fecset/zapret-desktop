@@ -15,13 +15,17 @@
   <ItemGroup>
     <AvaloniaResource Include="Assets/app.ico" />
     <AvaloniaResource Include="Styles/Dropdowns.axaml" />
-    <None Include="FLUENT_ICONS_LICENSE.txt" Link="zapret/FLUENT_ICONS_LICENSE.txt" CopyToOutputDirectory="PreserveNewest" />
     <None Include="../../README.md" Link="README.md" CopyToOutputDirectory="Never" CopyToPublishDirectory="Never" />
-    <None Include="../../LICENSE" Link="zapret/LICENSE" CopyToOutputDirectory="PreserveNewest" />
-    <None Include="../../THIRD_PARTY_NOTICES.md" Link="zapret/THIRD_PARTY_NOTICES.md" CopyToOutputDirectory="PreserveNewest" />
-    <None Include="../../licenses/**" Link="zapret/licenses/%(RecursiveDir)%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" />
+    <EmbeddedResource Include="../../LICENSE" LogicalName="Legal.ZapretDesktop.LICENSE" />
+    <EmbeddedResource Include="../../THIRD_PARTY_NOTICES.md" LogicalName="Legal.THIRD_PARTY_NOTICES.md" />
+    <EmbeddedResource Include="../../zapret/LICENSE.txt" LogicalName="Legal.Zapret.LICENSE.txt" />
+    <EmbeddedResource Include="../../licenses/Avalonia-LICENSE.md" LogicalName="Legal.Avalonia-LICENSE.md" />
+    <EmbeddedResource Include="../../licenses/DotNet-LICENSE.txt" LogicalName="Legal.DotNet-LICENSE.txt" />
+    <EmbeddedResource Include="../../licenses/FluentIcons-LICENSE.txt" LogicalName="Legal.FluentIcons-LICENSE.txt" />
+    <EmbeddedResource Include="../../licenses/Inter-OFL.txt" LogicalName="Legal.Inter-OFL.txt" />
+    <EmbeddedResource Include="../../licenses/WinDivert-LICENSE.txt" LogicalName="Legal.WinDivert-LICENSE.txt" />
     <None Include="../../zapret/**"
-          Exclude="../../zapret/TgWsProxy_windows.exe;../../zapret/lists/*.backup;../../zapret/lists/*.test-backup.txt;../../zapret/utils/*.enabled"
+          Exclude="../../zapret/TgWsProxy_windows.exe;../../zapret/LICENSE.txt;../../zapret/lists/*.backup;../../zapret/lists/*.test-backup.txt;../../zapret/utils/*.enabled"
           Link="zapret/%(RecursiveDir)%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" ExcludeFromSingleFile="true" />
     <ProjectReference Include="../Zapret.Core/Zapret.Core.csproj" />
     <ProjectReference Include="../Zapret.Infrastructure/Zapret.Infrastructure.csproj" />

@@ -294,7 +294,37 @@ public sealed partial class MainWindow
         stack.Children.Add(Text("bol-van — автор zapret: github.com/bol-van/zapret", 14));
         stack.Children.Add(Text("Flowseal — автор Windows-сборки zapret-discord-youtube: github.com/Flowseal/zapret-discord-youtube", 14));
         stack.Children.Add(Text("fecset — автор Zapret Desktop: github.com/fecset/zapret-desktop", 14));
+        stack.Children.Add(Button("Лицензии и уведомления", () =>
+        {
+            ShowLegalNotices();
+            return Task.CompletedTask;
+        }));
         page.Children.Add(Panel(stack));
+    }
+
+    private void ShowLegalNotices()
+    {
+        var viewer = new Window
+        {
+            Title = "Лицензии и уведомления",
+            Width = 820,
+            Height = 650,
+            MinWidth = 500,
+            MinHeight = 350,
+            Background = CanvasBrush,
+            Content = new TextBox
+            {
+                Text = LegalNotices.ReadAll(),
+                IsReadOnly = true,
+                AcceptsReturn = true,
+                TextWrapping = TextWrapping.Wrap,
+                Margin = new Thickness(16),
+                Padding = new Thickness(16),
+                Background = SurfaceBrush,
+                Foreground = TextBrush
+            }
+        };
+        viewer.Show(this);
     }
     private TextBox Input(string hint, double width) => new()
     {
