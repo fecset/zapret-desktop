@@ -11,6 +11,10 @@ public sealed partial class MainWindow
     private void BuildHome()
     {
         Heading("Главная", "Ваше подключение и всё важное — на одном экране.");
+        updateNotice = Text("", 13, FontWeight.SemiBold, WarnBrush);
+        updateNoticePanel = Panel(updateNotice, 14);
+        page.Children.Add(updateNoticePanel);
+        RefreshUpdateDisplay();
         var state = vm.Status?.State ?? ZapretRunState.Stopped;
         var running = state is ZapretRunState.Running or ZapretRunState.ServiceRunning;
         var statusColor = running ? GoodBrush : state == ZapretRunState.External ? WarnBrush : BadBrush;
@@ -86,7 +90,7 @@ public sealed partial class MainWindow
         Grid.SetColumn(choose, 1);
         quick.Children.Add(choose);
         page.Children.Add(quick);
-        page.Children.Add(Text($"Zapret {vm.UpstreamVersion}  ·  Zapret Desktop 0.1.1  ·  {vm.Status?.StartedAt?.ToLocalTime().ToString("g") ?? "не запущен"}", 11, color: MutedBrush));
+        page.Children.Add(Text($"Zapret {vm.UpstreamVersion}  ·  Zapret Desktop {vm.DesktopVersion}  ·  {vm.Status?.StartedAt?.ToLocalTime().ToString("g") ?? "не запущен"}", 11, color: MutedBrush));
     }
 
     private void AddMetric(Grid grid, int column, string label, string value, string detail, IBrush statusColor)

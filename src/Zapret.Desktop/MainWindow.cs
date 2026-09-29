@@ -1,5 +1,6 @@
 using System.ComponentModel;
 using System.Collections;
+using System.Diagnostics;
 using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Controls.Templates;
@@ -24,6 +25,11 @@ public sealed partial class MainWindow : Window
     private readonly Dictionary<string, Button> navButtons = [];
     private TextBlock footer = new();
     private TextBlock sidebarStatus = new();
+    private TextBlock? upstreamUpdateStatus;
+    private TextBlock? desktopUpdateStatus;
+    private TextBlock? updateNotice;
+    private Border? updateNoticePanel;
+    private Button? updateCheckButton;
     private Border sidebarStatusDot = new();
     private ScrollViewer contentScroll = new();
     private ContentControl contentHost = new();
@@ -73,6 +79,7 @@ public sealed partial class MainWindow : Window
             ApplyTheme();
             Show("Главная");
             statusTimer.Start();
+            if (vm.Settings.CheckUpdates) await CheckAndOpenUpdatesAsync();
         };
         statusTimer.Tick += async (_, _) => await vm.RefreshAsync();
         feedbackTimer.Tick += (_, _) => { feedbackTimer.Stop(); footer.IsVisible = false; };
@@ -123,6 +130,9 @@ public sealed partial class MainWindow : Window
             }
             sidebarStatus.Text = vm.StatusText;
             sidebarStatusDot.Background = CurrentStatusBrush();
+            if (e.PropertyName is nameof(MainViewModel.UpstreamUpdate) or nameof(MainViewModel.DesktopUpdate)
+                or nameof(MainViewModel.CheckingUpdates) or nameof(MainViewModel.UpdateError))
+                RefreshUpdateDisplay();
             if (e.PropertyName == nameof(MainViewModel.SelectedStrategy) && currentPage is "Главная" or "Стратегии")
                 Show(currentPage);
             else if (e.PropertyName == nameof(MainViewModel.StrategyTestSummary) && currentPage == "Стратегии")
@@ -164,7 +174,7 @@ public sealed partial class MainWindow : Window
         sidebarStatus = new TextBlock { Text = vm.StatusText, Foreground = TextBrush, FontSize = 13 };
         online.Children.Add(sidebarStatus);
         sideFoot.Children.Add(online);
-        sideFoot.Children.Add(new TextBlock { Text = "Zapret Desktop 0.1.1", Foreground = MutedBrush, FontSize = 12 });
+        sideFoot.Children.Add(new TextBlock { Text = $"Zapret Desktop {vm.DesktopVersion}", Foreground = MutedBrush, FontSize = 12 });
         sideFoot.Children.Add(new TextBlock { Text = "Автор: fecset · Основа: bol-van, Flowseal", Foreground = MutedBrush, FontSize = 11,
             TextWrapping = TextWrapping.Wrap });
         Grid.SetRow(sideFoot, 2);
@@ -244,6 +254,47 @@ public sealed partial class MainWindow : Window
         }
         footer.Text = vm.Message;
     }
+
+    private async Task CheckAndOpenUpdatesAsync()
+    {
+        if (vm.CheckingUpdates) return;
+        await vm.CheckUpdatesAsync();
+        foreach (var update in new[] { vm.UpstreamUpdate, vm.DesktopUpdate })
+        {
+            if (update?.Available != true || !Uri.TryCreate(update.ReleaseUrl, UriKind.Absolute, out var url) ||
+                url.Scheme != Uri.UriSchemeHttps || url.Host != "github.com" ||
+                !url.AbsolutePath.Contains("/releases/", StringComparison.OrdinalIgnoreCase)) continue;
+            try { Process.Start(new ProcessStartInfo(url.AbsoluteUri) { UseShellExecute = true }); }
+            catch (Exception ex) { vm.Log("ERROR", $"Не удалось открыть страницу выпуска {update.Product}: {ex.Message}"); }
+        }
+    }
+
+    private void RefreshUpdateDisplay()
+    {
+        if (updateCheckButton is not null) updateCheckButton.IsEnabled = !vm.CheckingUpdates;
+        if (upstreamUpdateStatus is not null)
+        {
+            upstreamUpdateStatus.Text = UpdateStatus("zapret", vm.UpstreamUpdate);
+            upstreamUpdateStatus.Foreground = vm.UpstreamUpdate?.Available == true ? WarnBrush :
+                vm.UpstreamUpdate is null ? MutedBrush : GoodBrush;
+        }
+        if (desktopUpdateStatus is not null)
+        {
+            desktopUpdateStatus.Text = UpdateStatus("Zapret Desktop", vm.DesktopUpdate);
+            desktopUpdateStatus.Foreground = vm.DesktopUpdate?.Available == true ? WarnBrush :
+                vm.DesktopUpdate is null ? MutedBrush : GoodBrush;
+        }
+        var available = new[] { vm.UpstreamUpdate, vm.DesktopUpdate }.Where(x => x?.Available == true)
+            .Select(x => $"{x!.Product} {x.LatestVersion}").ToArray();
+        if (updateNoticePanel is not null) updateNoticePanel.IsVisible = available.Length > 0;
+        if (updateNotice is not null)
+            updateNotice.Text = "Доступны обновления: " + string.Join(", ", available) + ". Подробнее на страницах выпусков GitHub.";
+    }
+
+    private string UpdateStatus(string product, UpdateInfo? update) => update is null
+        ? vm.CheckingUpdates ? $"{product}: проверка..." : vm.UpdateError ?? $"{product}: проверка ещё не выполнена"
+        : update.Available ? $"{product}: доступна версия {update.LatestVersion} — {update.ReleaseUrl}"
+        : $"{product}: установлена актуальная версия {update.LocalVersion}";
 
     private void DetachPage()
     {
