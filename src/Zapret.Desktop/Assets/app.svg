@@ -1,0 +1,14 @@
+<svg preserveAspectRatio="none" overflow="visible" style="display: block;" width="256" height="256" viewBox="0 0 256 256" fill="none" xmlns="http://www.w3.org/2000/svg">
+<g id="Zapret symbol">
+<path id="Vector" d="M128 240C189.856 240 240 189.856 240 128C240 66.1441 189.856 16 128 16C66.1441 16 16 66.1441 16 128C16 189.856 66.1441 240 128 240Z" fill="url(#paint0_linear_0_4)"/>
+<path id="Vector_2" d="M151 43L76 132H124L103 214L182 113H135L151 43Z" fill="white"/>
+<path id="Vector_3" opacity="0.55" d="M76 132L87 119H155L135 145H88L76 132Z" fill="#DCE9FF"/>
+</g>
+<defs>
+<linearGradient id="paint0_linear_0_4" x1="25" y1="25" x2="224" y2="230" gradientUnits="userSpaceOnUse">
+<stop stop-color="#347BFF"/>
+<stop offset="0.52" stop-color="#315EF6"/>
+<stop offset="1" stop-color="#7755EF"/>
+</linearGradient>
+</defs>
+</svg>

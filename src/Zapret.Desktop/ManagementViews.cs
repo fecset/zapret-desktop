@@ -215,8 +215,10 @@ public sealed partial class MainWindow
         var tcp = Input("TCP порты", 170); tcp.Text = vm.Game.TcpPorts;
         var udp = Input("UDP порты", 170); udp.Text = vm.Game.UdpPorts;
         var gameRow = new WrapPanel { Orientation = Orientation.Horizontal };
+        var applyGame = Button("Применить", () => vm.SetGameAsync(
+            (GameFilterMode)(game.SelectedItem ?? GameFilterMode.Disabled), tcp.Text ?? "", udp.Text ?? ""), primary: true);
         foreach (var item in new Control[] { Labelled("Режим", game), Labelled("TCP порты", tcp), Labelled("UDP порты", udp),
-            Button("Применить", () => vm.SetGameAsync((GameFilterMode)(game.SelectedItem ?? GameFilterMode.Disabled), tcp.Text ?? "", udp.Text ?? ""), primary: true) })
+            Labelled(" ", applyGame) })
         { item.Margin = new Thickness(0, 0, 8, 8); gameRow.Children.Add(item); }
         stack.Children.Add(gameRow);
         stack.Children.Add(Text("IPSet Filter", 13, FontWeight.SemiBold));
@@ -296,9 +298,10 @@ public sealed partial class MainWindow
     }
     private TextBox Input(string hint, double width) => new()
     {
-        PlaceholderText = hint, Width = width, MinHeight = 40, Background = SurfaceRaisedBrush,
+        PlaceholderText = hint, Width = width, Height = 40, Background = SurfaceRaisedBrush,
         Foreground = TextBrush, BorderBrush = OutlineBrush, CornerRadius = new CornerRadius(8),
-        FontSize = 14, VerticalAlignment = VerticalAlignment.Center
+        Padding = new Thickness(12, 0), FontSize = 14,
+        VerticalAlignment = VerticalAlignment.Center, VerticalContentAlignment = VerticalAlignment.Center
     };
     private CheckBox Check(string label, bool value) => new()
     {

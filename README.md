@@ -1,4 +1,4 @@
-# ![Значок Zapret Desktop](src/Zapret.Desktop/Assets/app.png) Zapret Desktop 
+# ![Значок Zapret Desktop](src/Zapret.Desktop/Assets/app-32.png) Zapret Desktop
 
 **Декстопное приложение для управления Zapret на Windows.** Выбирайте стратегию, смотрите состояние процесса и службы, редактируйте списки и читайте логи в одном приложении.
 
@@ -59,7 +59,7 @@ dotnet test ZapretDesktop.slnx -c Release
 
 Для локального запуска используйте `dotnet run --project src/Zapret.Desktop/Zapret.Desktop.csproj`. Устройство решения кратко описано в [ARCHITECTURE.md](ARCHITECTURE.md).
 
-Для релизной сборки выполните `dotnet publish src/Zapret.Desktop/Zapret.Desktop.csproj -p:PublishProfile=WinX64 -o dist/ZapretDesktop-win-x64`. Профиль объединяет .NET и Avalonia в `Zapret.Desktop.exe`; папка `zapret` остаётся рядом с ним, поскольку приложение запускает `winws.exe`, использует драйвер и позволяет изменять списки.
+Для релизной сборки выполните `dotnet publish src/Zapret.Desktop/Zapret.Desktop.csproj -p:PublishProfile=WinX64 -o dist/ZapretDesktop-win-x64`. Профиль объединяет .NET и Avalonia в `Zapret.Desktop.exe`; рядом остаётся только папка `zapret` с движком, стратегиями и лицензионными уведомлениями.
 
 ## ⚖️ Лицензирование
 

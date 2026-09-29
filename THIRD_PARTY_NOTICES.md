@@ -9,6 +9,7 @@
 | WinDivert (`WinDivert.dll`, `WinDivert64.sys`) | [basil00](https://github.com/basil00/WinDivert) | LGPLv3 или GPLv2 на выбор; [копия официального текста лицензии](licenses/WinDivert-LICENSE.txt) и [исходный код](https://github.com/basil00/WinDivert). |
 | Fluent UI System Icons | [Microsoft](https://github.com/microsoft/fluentui-system-icons) | MIT; [копия лицензии](licenses/FluentIcons-LICENSE.txt). |
 | Avalonia | [AvaloniaUI](https://github.com/AvaloniaUI/Avalonia) | MIT; [копия лицензии](licenses/Avalonia-LICENSE.md). |
+| Inter | [The Inter Project Authors](https://github.com/rsms/inter) | SIL Open Font License 1.1; [копия лицензии](licenses/Inter-OFL.txt). |
 | .NET Runtime | [Microsoft и участники .NET](https://github.com/dotnet/runtime) | MIT; [копия лицензии](licenses/DotNet-LICENSE.txt). |
 
-При выпуске архива сохраняйте `zapret/LICENSE.txt`, папку `licenses/`, этот файл и лицензию самого приложения. Для WinDivert проверяйте условия распространения бинарной версии и доступность соответствующих исходников. Лицензии остальных пакетов NuGet указаны в их метаданных и репозиториях.
+В архиве выпуска тексты лицензий находятся в папке `zapret/`: `LICENSE` для Zapret Desktop, `LICENSE.txt` для zapret, а также `licenses/` и этот файл. Для WinDivert проверяйте условия распространения бинарной версии и доступность соответствующих исходников. Лицензии остальных пакетов NuGet указаны в их метаданных и репозиториях.

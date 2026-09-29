@@ -7,7 +7,6 @@ using Avalonia.Controls.Templates;
 using Avalonia.Input.Platform;
 using Avalonia.Layout;
 using Avalonia.Media;
-using Avalonia.Media.Imaging;
 using Avalonia.Platform.Storage;
 using Avalonia.Styling;
 using Avalonia.Threading;
@@ -18,7 +17,6 @@ namespace Zapret.Desktop;
 public sealed partial class MainWindow : Window
 {
     private readonly MainViewModel vm;
-    private readonly Bitmap brandImage;
     private readonly DispatcherTimer statusTimer = new() { Interval = TimeSpan.FromSeconds(5) };
     private readonly DispatcherTimer feedbackTimer = new() { Interval = TimeSpan.FromSeconds(8) };
     private readonly StackPanel page = new() { Spacing = 18 };
@@ -30,6 +28,14 @@ public sealed partial class MainWindow : Window
     private TextBlock? updateNotice;
     private Border? updateNoticePanel;
     private Button? updateCheckButton;
+    private readonly Dictionary<string, TextBlock> strategyResultLabels = new(StringComparer.OrdinalIgnoreCase);
+    private Border? strategySummaryPanel;
+    private TextBlock? strategySummaryText;
+    private Border? strategyProgressPanel;
+    private TextBlock? strategyProgressText;
+    private ProgressBar? strategyProgressBar;
+    private Button? strategyStartButton;
+    private Button? strategyCancelButton;
     private Border sidebarStatusDot = new();
     private ScrollViewer contentScroll = new();
     private ContentControl contentHost = new();
@@ -60,8 +66,6 @@ public sealed partial class MainWindow : Window
         Title = "Zapret Desktop";
         using (var iconStream = Avalonia.Platform.AssetLoader.Open(new Uri("avares://Zapret.Desktop/Assets/app.ico")))
             Icon = new WindowIcon(iconStream);
-        using (var brandStream = Avalonia.Platform.AssetLoader.Open(new Uri("avares://Zapret.Desktop/Assets/app.png")))
-            brandImage = new Bitmap(brandStream);
         Width = 1180;
         Height = 800;
         MinWidth = 890;
@@ -83,7 +87,7 @@ public sealed partial class MainWindow : Window
         };
         statusTimer.Tick += async (_, _) => await vm.RefreshAsync();
         feedbackTimer.Tick += (_, _) => { feedbackTimer.Stop(); footer.IsVisible = false; };
-        Closed += (_, _) => { statusTimer.Stop(); feedbackTimer.Stop(); brandImage.Dispose(); };
+        Closed += (_, _) => { statusTimer.Stop(); feedbackTimer.Stop(); };
         Closing += (_, e) =>
         {
             if (!exitAllowed && vm.Settings.MinimizeToTray)
@@ -135,8 +139,10 @@ public sealed partial class MainWindow : Window
                 RefreshUpdateDisplay();
             if (e.PropertyName == nameof(MainViewModel.SelectedStrategy) && currentPage is "Главная" or "Стратегии")
                 Show(currentPage);
-            else if (e.PropertyName == nameof(MainViewModel.StrategyTestSummary) && currentPage == "Стратегии")
-                Show("Стратегии");
+            else if (e.PropertyName is nameof(MainViewModel.StrategyTestSummary) or nameof(MainViewModel.StrategyChecks)
+                or nameof(MainViewModel.BestTestStrategy) or nameof(MainViewModel.TestingStrategies)
+                or nameof(MainViewModel.Busy) && currentPage == "Стратегии")
+                RefreshStrategyResults();
             else if (e.PropertyName == nameof(MainViewModel.Status) && currentPage is "Главная" or "Стратегии")
                 Show(currentPage);
         });
@@ -150,11 +156,22 @@ public sealed partial class MainWindow : Window
         var grid = new Grid { ColumnDefinitions = new ColumnDefinitions("238,*") };
         var side = new Grid { RowDefinitions = new RowDefinitions("Auto,*,Auto"), Background = SidebarBrush };
         var sideContent = new StackPanel { Margin = new Thickness(18, 24, 18, 0), Spacing = 3 };
-        var brand = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 11, Margin = new Thickness(8, 0, 0, 36) };
-        brand.Children.Add(new Image { Source = brandImage, Width = 32, Height = 32,
-            Stretch = Stretch.Uniform, VerticalAlignment = VerticalAlignment.Center });
-        brand.Children.Add(new TextBlock { Text = "Zapret", FontSize = 21, FontWeight = FontWeight.Bold,
-            Foreground = TextBrush, VerticalAlignment = VerticalAlignment.Center });
+        var brand = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 10, Margin = new Thickness(8, 0, 0, 36) };
+        brand.Children.Add(BrandMark.Create(48));
+        var wordmark = new StackPanel { VerticalAlignment = VerticalAlignment.Center };
+        wordmark.Children.Add(new TextBlock
+        {
+            Text = "Zapret", FontSize = 22, FontWeight = FontWeight.ExtraBold,
+            FontFamily = new FontFamily("fonts:Inter#Inter"), Foreground = TextBrush
+        });
+        wordmark.Children.Add(new TextBlock
+        {
+            Text = "DESKTOP", FontSize = 10, FontWeight = FontWeight.SemiBold,
+            FontFamily = new FontFamily("fonts:Inter#Inter"),
+            Foreground = Brush(IsLight ? "#52627F" : "#9FB1D9"),
+            Margin = new Thickness(2, -2, 0, 0)
+        });
+        brand.Children.Add(wordmark);
         sideContent.Children.Add(brand);
         sideContent.Children.Add(SideLabel("ОСНОВНОЕ"));
         AddNavigation(sideContent, "Главная", FluentIcons.Home);
@@ -371,11 +388,12 @@ public sealed partial class MainWindow : Window
     }
     private ComboBox Dropdown(IEnumerable items, object? selected, double width) => new()
     {
-        ItemsSource = items, SelectedItem = selected, Width = width, MinHeight = 40,
+        ItemsSource = items, SelectedItem = selected, Width = width, Height = 40,
         Background = SurfaceRaisedBrush, Foreground = TextBrush,
         BorderBrush = OutlineBrush, BorderThickness = new Thickness(1),
-        CornerRadius = new CornerRadius(8), Padding = new Thickness(12, 7),
-        FontSize = 14, VerticalAlignment = VerticalAlignment.Center
+        CornerRadius = new CornerRadius(8), Padding = new Thickness(12, 0),
+        FontSize = 14, VerticalAlignment = VerticalAlignment.Center,
+        VerticalContentAlignment = VerticalAlignment.Center
     };
     private void ApplyTheme()
     {

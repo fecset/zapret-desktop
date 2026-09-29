@@ -1,3 +1,5 @@
+param([switch]$DesktopMode)
+
 $hasErrors = $false
 
 $rootDir = Split-Path $PSScriptRoot
@@ -54,6 +56,7 @@ function Set-IpsetMode {
 # input buffer and would be swallowed instantly by a bare ReadKey.
 function Wait-AnyKey {
     param([string]$message = "Press any key to close...")
+    if ($DesktopMode) { return }
     Write-Host $message -ForegroundColor Yellow
     try {
         while ([System.Console]::KeyAvailable) { [void][System.Console]::ReadKey($true) }
@@ -408,6 +411,7 @@ $dpiTargets = @()
 $targetDir = $rootDir
 if (-not $targetDir) { $targetDir = Split-Path -Parent $MyInvocation.MyCommand.Path }
 $batFiles = Get-ChildItem -Path $targetDir -Filter "*.bat" | Where-Object { $_.Name -notlike "service*" } | Sort-Object { [Regex]::Replace($_.Name, "(\d+)", { $args[0].Value.PadLeft(8, "0") }) }
+if ($DesktopMode) { $batFiles = @($batFiles | Where-Object { $_.Name -like 'general*.bat' }) }
 
 $globalResults = @()
 
@@ -520,8 +524,8 @@ function Read-ConfigSelection {
 
 while ($true) {
     $globalResults = @()
-$testType = Read-TestType
-$mode = Read-ModeSelection
+$testType = if ($DesktopMode) { 'standard' } else { Read-TestType }
+$mode = if ($DesktopMode) { 'all' } else { Read-ModeSelection }
 if ($mode -eq 'select') {
     $selected = Read-ConfigSelection -allFiles $batFiles
     $batFiles = @($selected)
@@ -587,6 +591,11 @@ if (-not $batFiles -or $batFiles.Count -eq 0) {
 
 # Stop winws
 function Stop-Zapret {
+    if ($DesktopMode) {
+        Write-Host "__ZD_STOP__"
+        [void][Console]::ReadLine()
+        return
+    }
     Get-Process -Name "winws" -ErrorAction SilentlyContinue | Stop-Process -Force
 }
 
@@ -675,12 +684,21 @@ try {
     
     # Start config
     Write-Host "  > Starting config..." -ForegroundColor Cyan
-    $proc = Start-Process -FilePath "cmd.exe" -ArgumentList "/c `"$($file.FullName)`"" -WorkingDirectory $targetDir -PassThru -WindowStyle Minimized
+    $proc = $null
+    if ($DesktopMode) {
+        Write-Host "__ZD_START__|$($file.Name)"
+        if ([Console]::ReadLine() -ne 'OK') {
+            Write-Host "  > Strategy failed to start (winws process not found). Skipping..." -ForegroundColor Red
+            continue
+        }
+    } else {
+        $proc = Start-Process -FilePath "cmd.exe" -ArgumentList "/c `"$($file.FullName)`"" -WorkingDirectory $targetDir -PassThru -WindowStyle Minimized
+    }
     
     # Wait init
     if (-not (Wait-WinwsReady)) {
         Write-Host "  > Strategy failed to start (winws process not found). Skipping..." -ForegroundColor Red
-        if (-not $proc.HasExited) { Stop-Process -Id $proc.Id -Force -ErrorAction SilentlyContinue }
+        if ($proc -and -not $proc.HasExited) { Stop-Process -Id $proc.Id -Force -ErrorAction SilentlyContinue }
         continue
     }
     
@@ -851,6 +869,19 @@ try {
         }
 
         $globalResults += @{ Config = $file.Name; Type = 'standard'; Results = $targetResults }
+        if ($DesktopMode) {
+            $httpOk = $httpFail = $unsupported = $pingOk = $pingFail = 0
+            foreach ($result in $targetResults) {
+                foreach ($token in $result.HttpTokens) {
+                    if ($token -match ':OK\b') { $httpOk++ }
+                    elseif ($token -match ':ERROR\b|:SSL\b') { $httpFail++ }
+                    elseif ($token -match ':UNSUP\b') { $unsupported++ }
+                }
+                if ($result.PingResult -eq 'Timeout') { $pingFail++ }
+                elseif ($result.PingResult -ne 'n/a') { $pingOk++ }
+            }
+            Write-Host "__ZD_RESULT__|$($file.Name)|$httpOk|$httpFail|$unsupported|$pingOk|$pingFail"
+        }
     } else {
         Write-Host "  > Running DPI checkers..." -ForegroundColor DarkGray
         $dpiResults = Invoke-DpiSuite -Targets $dpiTargets -TimeoutSeconds $dpiTimeoutSeconds -RangeBytes $dpiRangeBytes -MaxParallel $dpiMaxParallel
@@ -859,7 +890,7 @@ try {
     
     # Stop
     Stop-Zapret
-    if (-not $proc.HasExited) { Stop-Process -Id $proc.Id -Force -ErrorAction SilentlyContinue }
+    if ($proc -and -not $proc.HasExited) { Stop-Process -Id $proc.Id -Force -ErrorAction SilentlyContinue }
 }
 
     Write-Host ""
