@@ -134,8 +134,8 @@ public sealed partial class MainWindow
     private void BuildStrategies()
     {
         Heading("Стратегии", "Выберите способ запуска. Zapret автоматически обнаруживает новые general*.bat.");
+        page.Children.Add(Text($"Доступные стратегии: {vm.Strategies.Count}", 14, FontWeight.SemiBold, MutedBrush));
         var bar = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 9 };
-        bar.Children.Add(Text($"Доступные стратегии: {vm.Strategies.Count}", 14, FontWeight.SemiBold, MutedBrush));
         bar.Children.Add(Button("Автоподбор", vm.TestStrategiesAsync, primary: true));
         bar.Children.Add(Button("Отменить тест", () => { vm.CancelStrategyTest(); return Task.CompletedTask; }));
         page.Children.Add(bar);
