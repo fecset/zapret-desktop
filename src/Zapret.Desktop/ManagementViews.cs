@@ -241,7 +241,7 @@ public sealed partial class MainWindow
         var tray = Check("При закрытии скрывать окно в трей", vm.Settings.MinimizeToTray);
         var updates = Check("Проверять обновления", vm.Settings.CheckUpdates);
         foreach (var check in new[] { windows, launch, tray, updates }) stack.Children.Add(check);
-        var themeRow = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 12 };
+        var themeRow = new StackPanel { Orientation = Orientation.Vertical, Spacing = 6 };
         themeRow.Children.Add(Text("Тема", 12, color: MutedBrush));
         var theme = Dropdown(new[] { "System", "Light", "Dark" }, vm.Settings.Theme, 160);
         themeRow.Children.Add(theme);
