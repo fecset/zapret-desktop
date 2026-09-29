@@ -5,30 +5,35 @@ using Zapret.Core;
 namespace Zapret.Infrastructure;
 
 public sealed class PowerShellStrategyTester(IZapretDistribution distribution, IServiceManager service,
-    IZapretProcessManager process, IPrivilegeService privilege) : IStrategyTester
+    IZapretProcessManager process, IPrivilegeService privilege, IStrategyProvider strategies) : IStrategyTester
 {
-    public async Task<StrategyTestResult> RunAsync(IProgress<string> progress, CancellationToken cancellationToken = default)
+    public async Task<StrategyTestResult> RunAsync(IProgress<string> progress,
+        IProgress<StrategyCheckProgress> strategyProgress, CancellationToken cancellationToken = default)
     {
         if (!privilege.IsAdministrator) throw new UnauthorizedAccessException("Для автоподбора нужны права администратора.");
         if (await service.GetStatusAsync(cancellationToken) != "NotInstalled")
             throw new InvalidOperationException("Перед автоподбором удалите службу zapret на странице настроек.");
         if ((await process.GetStatusAsync(cancellationToken)).State != ZapretRunState.Stopped)
-            throw new InvalidOperationException("Перед автоподбором остановите Zapret: тестовый скрипт завершает все процессы winws.");
+            throw new InvalidOperationException("Перед автоподбором остановите Zapret.");
+        var available = (await strategies.GetStrategiesAsync(cancellationToken)).ToDictionary(
+            item => Path.GetFileName(item.SourceFile), StringComparer.OrdinalIgnoreCase);
         var script = SafePaths.RequireDirectFile(distribution.Root, Path.Combine(distribution.Root, "utils", "test zapret.ps1"));
-        var startedAt = DateTime.Now;
         var info = new ProcessStartInfo(Path.Combine(Environment.SystemDirectory, "WindowsPowerShell", "v1.0", "powershell.exe"))
         {
             WorkingDirectory = distribution.Root, UseShellExecute = false, CreateNoWindow = true,
             RedirectStandardInput = true, RedirectStandardOutput = true, RedirectStandardError = true
         };
-        foreach (var arg in new[] { "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", script }) info.ArgumentList.Add(arg);
+        foreach (var arg in new[] { "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", script, "-DesktopMode" })
+            info.ArgumentList.Add(arg);
         using var runner = Process.Start(info) ?? throw new InvalidOperationException("Не удалось запустить PowerShell для теста стратегий.");
-        await runner.StandardInput.WriteLineAsync("1"); // Standard tests
-        await runner.StandardInput.WriteLineAsync("1"); // All configs
-        await runner.StandardInput.WriteLineAsync("");  // Final Read-Host fallback
-        runner.StandardInput.Close();
+        async Task ReplyAsync(string value)
+        {
+            await runner.StandardInput.WriteLineAsync(value);
+            await runner.StandardInput.FlushAsync();
+        }
         string? best = null;
         string? results = null;
+        string? currentFile = null;
         var completed = new CompletedStrategyTracker();
         using var registration = cancellationToken.Register(() =>
         {
@@ -38,6 +43,45 @@ public sealed class PowerShellStrategyTester(IZapretDistribution distribution, I
         {
             while (await runner.StandardOutput.ReadLineAsync(cancellationToken) is { } line)
             {
+                if (line == "__ZD_STOP__")
+                {
+                    try { await process.StopOwnedAsync(); }
+                    catch (Exception ex) { progress.Report("[ERROR] Не удалось остановить winws: " + ex.Message); }
+                    await ReplyAsync("OK");
+                    continue;
+                }
+                if (line.StartsWith("__ZD_START__|", StringComparison.Ordinal))
+                {
+                    var fileName = line["__ZD_START__|".Length..];
+                    currentFile = fileName;
+                    strategyProgress.Report(new(fileName, StrategyCheckState.Running));
+                    try
+                    {
+                        if (!available.TryGetValue(fileName, out var strategy))
+                            throw new InvalidOperationException($"Стратегия {fileName} не найдена или не поддерживается.");
+                        await process.StartAsync(strategy, cancellationToken);
+                        await ReplyAsync("OK");
+                    }
+                    catch (Exception ex) when (ex is not OperationCanceledException)
+                    {
+                        strategyProgress.Report(new(fileName, StrategyCheckState.Failed));
+                        progress.Report("[ERROR] " + ex.Message);
+                        await ReplyAsync("FAIL");
+                    }
+                    continue;
+                }
+                if (line.StartsWith("__ZD_RESULT__|", StringComparison.Ordinal))
+                {
+                    var fields = line.Split('|');
+                    if (fields.Length == 7 && int.TryParse(fields[2], out var httpOk) &&
+                        int.TryParse(fields[3], out var httpFailed) && int.TryParse(fields[4], out var unsupported) &&
+                        int.TryParse(fields[5], out var pingOk) && int.TryParse(fields[6], out var pingFailed))
+                        strategyProgress.Report(new(fields[1], StrategyCheckState.Completed,
+                            httpOk, httpFailed, unsupported, pingOk, pingFailed));
+                    continue;
+                }
+                if (line.Contains("Strategy failed to start", StringComparison.OrdinalIgnoreCase) && currentFile is not null)
+                    strategyProgress.Report(new(currentFile, StrategyCheckState.Failed));
                 progress.Report(line);
                 completed.Observe(line);
                 if (line.StartsWith("Best config: ", StringComparison.OrdinalIgnoreCase))
@@ -56,23 +100,8 @@ public sealed class PowerShellStrategyTester(IZapretDistribution distribution, I
         }
         finally
         {
-            if (cancellationToken.IsCancellationRequested)
-            {
-                foreach (var candidate in Process.GetProcessesByName("winws"))
-                {
-                    using (candidate)
-                    {
-                        try
-                        {
-                            if (candidate.StartTime >= startedAt &&
-                                string.Equals(candidate.MainModule?.FileName, Path.Combine(distribution.BinDirectory, "winws.exe"), StringComparison.OrdinalIgnoreCase))
-                                candidate.Kill();
-                        }
-                        catch (Exception ex) when (ex is InvalidOperationException or System.ComponentModel.Win32Exception) { }
-                    }
-                }
-            }
-            await RestoreIpSetIfInterruptedAsync();
+            try { await process.StopOwnedAsync(); }
+            finally { await RestoreIpSetIfInterruptedAsync(); }
         }
     }
     private async Task RestoreIpSetIfInterruptedAsync()

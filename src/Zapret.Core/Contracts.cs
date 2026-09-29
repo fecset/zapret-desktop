@@ -94,9 +94,13 @@ public interface IUpdateService
     Task<UpdateInfo> CheckDesktopAsync(string localVersion, CancellationToken cancellationToken = default);
 }
 public sealed record StrategyTestResult(string? BestStrategy, string ResultFile, bool Cancelled = false);
+public enum StrategyCheckState { Running, Completed, Failed, Cancelled }
+public sealed record StrategyCheckProgress(string FileName, StrategyCheckState State,
+    int HttpOk = 0, int HttpFailed = 0, int Unsupported = 0, int PingOk = 0, int PingFailed = 0);
 public interface IStrategyTester
 {
-    Task<StrategyTestResult> RunAsync(IProgress<string> progress, CancellationToken cancellationToken = default);
+    Task<StrategyTestResult> RunAsync(IProgress<string> progress, IProgress<StrategyCheckProgress> strategyProgress,
+        CancellationToken cancellationToken = default);
 }
 public interface IStartupService
 {

@@ -42,7 +42,7 @@ internal static class Program
             using var activation = new EventWaitHandle(false, EventResetMode.AutoReset, InstanceName + "-activate");
             using var stopListening = new CancellationTokenSource();
             var listener = Task.Run(() => ListenForActivation(activation, stopListening.Token));
-            try { AppBuilder.Configure<App>().UsePlatformDetect().StartWithClassicDesktopLifetime(args); }
+            try { AppBuilder.Configure<App>().UsePlatformDetect().WithInterFont().StartWithClassicDesktopLifetime(args); }
             finally
             {
                 stopListening.Cancel();

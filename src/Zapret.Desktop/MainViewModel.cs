@@ -27,6 +27,7 @@ public sealed class MainViewModel(IZapretDistribution distribution, IStrategyPro
     private CancellationTokenSource? testCancellation;
     private string? bestTestStrategy;
     private string? strategyTestSummary;
+    private readonly Dictionary<string, StrategyCheckProgress> strategyChecks = new(StringComparer.OrdinalIgnoreCase);
     private string logLevelFilter = "ALL";
     private bool serviceAutoStart;
     public ObservableCollection<ZapretStrategy> Strategies { get; } = [];
@@ -77,6 +78,8 @@ public sealed class MainViewModel(IZapretDistribution distribution, IStrategyPro
     public string? UpdateError { get => updateError; private set => SetProperty(ref updateError, value); }
     public string? BestTestStrategy { get => bestTestStrategy; private set => SetProperty(ref bestTestStrategy, value); }
     public string? StrategyTestSummary { get => strategyTestSummary; private set => SetProperty(ref strategyTestSummary, value); }
+    public IReadOnlyDictionary<string, StrategyCheckProgress> StrategyChecks => strategyChecks;
+    public bool TestingStrategies => testCancellation is not null;
 
     public async Task InitializeAsync()
     {
@@ -223,10 +226,13 @@ public sealed class MainViewModel(IZapretDistribution distribution, IStrategyPro
         }
         finally { CheckingUpdates = false; }
     }
-    public Task TestStrategiesAsync() => RunAsync(async () =>
+    public Task TestStrategiesAsync() => TestingStrategies ? Task.CompletedTask : RunAsync(async () =>
     {
         testCancellation = new CancellationTokenSource();
+        OnPropertyChanged(nameof(TestingStrategies));
         BestTestStrategy = null;
+        strategyChecks.Clear();
+        OnPropertyChanged(nameof(StrategyChecks));
         StrategyTestSummary = "Идёт проверка стратегий. Результат появится здесь.";
         var testFinished = false;
         var progress = new Progress<string>(line =>
@@ -237,10 +243,16 @@ public sealed class MainViewModel(IZapretDistribution distribution, IStrategyPro
                 Log("INFO", line);
             Message = line;
         });
+        var strategyProgress = new Progress<StrategyCheckProgress>(result =>
+        {
+            strategyChecks[result.FileName] = result;
+            OnPropertyChanged(nameof(StrategyChecks));
+        });
         try
         {
-            var result = await tester.RunAsync(progress, testCancellation.Token);
+            var result = await tester.RunAsync(progress, strategyProgress, testCancellation.Token);
             testFinished = true;
+            if (result.Cancelled) CancelRunningStrategyChecks();
             BestTestStrategy = result.BestStrategy;
             StrategyTestSummary = result.Cancelled
                 ? result.BestStrategy is null
@@ -253,16 +265,31 @@ public sealed class MainViewModel(IZapretDistribution distribution, IStrategyPro
         }
         catch (OperationCanceledException) when (testCancellation.IsCancellationRequested)
         {
+            CancelRunningStrategyChecks();
             StrategyTestSummary = "Тест остановлен до завершения первой проверки.";
             Message = StrategyTestSummary;
         }
         catch (Exception ex)
         {
+            CancelRunningStrategyChecks();
             StrategyTestSummary = "Автоподбор не выполнен: " + ex.Message;
             throw;
         }
-        finally { testFinished = true; testCancellation.Dispose(); testCancellation = null; }
+        finally
+        {
+            testFinished = true;
+            testCancellation.Dispose();
+            testCancellation = null;
+            OnPropertyChanged(nameof(TestingStrategies));
+        }
     });
+    private void CancelRunningStrategyChecks()
+    {
+        foreach (var (key, result) in strategyChecks.ToArray())
+            if (result.State == StrategyCheckState.Running)
+                strategyChecks[key] = result with { State = StrategyCheckState.Cancelled };
+        OnPropertyChanged(nameof(StrategyChecks));
+    }
     public void CancelStrategyTest()
     {
         if (testCancellation is null) return;
