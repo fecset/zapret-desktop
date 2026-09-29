@@ -21,6 +21,9 @@ public sealed class MainViewModel(IZapretDistribution distribution, IStrategyPro
     private readonly SemaphoreSlim operationGate = new(1, 1);
     private bool busy;
     private UpdateInfo? upstreamUpdate;
+    private UpdateInfo? desktopUpdate;
+    private bool checkingUpdates;
+    private string? updateError;
     private CancellationTokenSource? testCancellation;
     private string? bestTestStrategy;
     private string? strategyTestSummary;
@@ -45,6 +48,7 @@ public sealed class MainViewModel(IZapretDistribution distribution, IStrategyPro
     public IReadOnlyList<string> ListFiles => lists.AvailableFiles;
     public IReadOnlyList<string> FakePayloads => fakes.GetAvailablePayloads();
     public string UpstreamVersion => distribution.Version ?? "неизвестна";
+    public string DesktopVersion => typeof(MainViewModel).Assembly.GetName().Version?.ToString(3) ?? "неизвестна";
     public string DistributionPath => distribution.Root;
     public bool IsAdministrator => privilege.IsAdministrator;
     public DesktopSettings Settings => settings;
@@ -68,6 +72,9 @@ public sealed class MainViewModel(IZapretDistribution distribution, IStrategyPro
     public bool Busy { get => busy; private set => SetProperty(ref busy, value); }
     public bool ServiceAutoStart { get => serviceAutoStart; private set => SetProperty(ref serviceAutoStart, value); }
     public UpdateInfo? UpstreamUpdate { get => upstreamUpdate; private set => SetProperty(ref upstreamUpdate, value); }
+    public UpdateInfo? DesktopUpdate { get => desktopUpdate; private set => SetProperty(ref desktopUpdate, value); }
+    public bool CheckingUpdates { get => checkingUpdates; private set => SetProperty(ref checkingUpdates, value); }
+    public string? UpdateError { get => updateError; private set => SetProperty(ref updateError, value); }
     public string? BestTestStrategy { get => bestTestStrategy; private set => SetProperty(ref bestTestStrategy, value); }
     public string? StrategyTestSummary { get => strategyTestSummary; private set => SetProperty(ref strategyTestSummary, value); }
 
@@ -181,12 +188,41 @@ public sealed class MainViewModel(IZapretDistribution distribution, IStrategyPro
         Log("INFO", $"Список {file} изменён");
     });
     public void OpenListsFolder() => lists.OpenFolder();
-    public Task CheckUpdatesAsync() => RunAsync(async () =>
+    public async Task CheckUpdatesAsync()
     {
-        UpstreamUpdate = await updates.CheckUpstreamAsync();
-        Message = UpstreamUpdate.Available ? $"Доступна версия zapret {UpstreamUpdate.LatestVersion}" : "Upstream zapret обновлён";
-        Log("INFO", Message);
-    });
+        if (CheckingUpdates) return;
+        CheckingUpdates = true;
+        UpdateError = null;
+        try
+        {
+            async Task<UpdateInfo?> CheckAsync(Func<Task<UpdateInfo>> check, string product)
+            {
+                try { return await check(); }
+                catch (Exception ex)
+                {
+                    Log("WARN", $"Не удалось проверить обновления {product}: {ex.Message}");
+                    return null;
+                }
+            }
+            var upstreamTask = CheckAsync(() => updates.CheckUpstreamAsync(), "zapret");
+            var desktopTask = CheckAsync(() => updates.CheckDesktopAsync(DesktopVersion), "Zapret Desktop");
+            await Task.WhenAll(upstreamTask, desktopTask);
+            UpstreamUpdate = await upstreamTask;
+            DesktopUpdate = await desktopTask;
+            if (UpstreamUpdate is null || DesktopUpdate is null)
+                UpdateError = "Не удалось проверить " + string.Join(" и ", new[]
+                {
+                    UpstreamUpdate is null ? "zapret" : null,
+                    DesktopUpdate is null ? "Zapret Desktop" : null
+                }.Where(x => x is not null)) + ". Проверьте подключение к интернету.";
+            var available = new[] { UpstreamUpdate, DesktopUpdate }.Where(x => x?.Available == true)
+                .Select(x => $"{x!.Product} {x.LatestVersion}").ToArray();
+            Message = available.Length > 0 ? "Доступны обновления: " + string.Join(", ", available) :
+                UpdateError ?? "Установлены актуальные версии zapret и Zapret Desktop";
+            Log("INFO", Message);
+        }
+        finally { CheckingUpdates = false; }
+    }
     public Task TestStrategiesAsync() => RunAsync(async () =>
     {
         testCancellation = new CancellationTokenSource();
@@ -256,7 +292,7 @@ public sealed class MainViewModel(IZapretDistribution distribution, IStrategyPro
     }
     public void ClearLogs() { Logs.Clear(); FilteredLogs.Clear(); }
     public string BuildDiagnosticReport() =>
-        "Zapret Desktop 0.1.1 | upstream " + UpstreamVersion + Environment.NewLine +
+        "Zapret Desktop " + DesktopVersion + " | upstream " + UpstreamVersion + Environment.NewLine +
         string.Join(Environment.NewLine, Diagnostics.Select(x => $"{(x.Passed ? "OK" : "FAIL")} {x.Name}: {x.Detail} — {x.Solution}"));
     public async Task SaveLogsAsync(Stream stream, CancellationToken cancellationToken = default)
     {

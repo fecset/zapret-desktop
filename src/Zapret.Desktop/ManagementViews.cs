@@ -137,7 +137,7 @@ public sealed partial class MainWindow
 
     private void BuildLogs()
     {
-        Heading("Логи", "Новые события сверху. Прокручивайте журнал внутри окна ниже.");
+        Heading("Логи", "Новые события отображаются сверху.");
         var tools = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 8 };
         var filter = Dropdown(new[] { "ALL", "INFO", "WARN", "ERROR" }, vm.LogLevelFilter, 125);
         filter.SelectionChanged += (_, _) => vm.LogLevelFilter = filter.SelectedItem as string ?? "ALL";
@@ -239,7 +239,7 @@ public sealed partial class MainWindow
         var windows = Check("Запускать приложение вместе с Windows", vm.Settings.StartWithWindows);
         var launch = Check("Запускать Zapret при открытии приложения", vm.Settings.StartZapretOnLaunch);
         var tray = Check("При закрытии скрывать окно в трей", vm.Settings.MinimizeToTray);
-        var updates = Check("Проверять обновления", vm.Settings.CheckUpdates);
+        var updates = Check("Проверять обновления при запуске", vm.Settings.CheckUpdates);
         foreach (var check in new[] { windows, launch, tray, updates }) stack.Children.Add(check);
         var themeRow = new StackPanel { Orientation = Orientation.Vertical, Spacing = 6 };
         themeRow.Children.Add(Text("Тема", 12, color: MutedBrush));
@@ -261,12 +261,15 @@ public sealed partial class MainWindow
     private void UpdateSettings()
     {
         var stack = new StackPanel { Spacing = 10 };
-        stack.Children.Add(Text("Обновления upstream zapret", 17, FontWeight.SemiBold));
-        stack.Children.Add(Text($"Установлена версия {vm.UpstreamVersion}. Проверка не скачивает и не запускает файлы.", 12, color: MutedBrush));
-        stack.Children.Add(Button("Проверить обновления", async () => { await vm.CheckUpdatesAsync(); Show("Настройки"); }));
-        if (vm.UpstreamUpdate is { } update)
-            stack.Children.Add(Text(update.Available ? $"Доступна версия {update.LatestVersion}: {update.ReleaseUrl}" :
-                "Установлена актуальная версия upstream.", 12, color: update.Available ? WarnBrush : GoodBrush));
+        stack.Children.Add(Text("Обновления zapret и Zapret Desktop", 17, FontWeight.SemiBold));
+        stack.Children.Add(Text("Новые версии проверяются на GitHub. Если доступно обновление, его страница откроется в браузере.", 12, color: MutedBrush));
+        updateCheckButton = Button("Проверить обновления", CheckAndOpenUpdatesAsync);
+        stack.Children.Add(updateCheckButton);
+        upstreamUpdateStatus = Text("", 12);
+        desktopUpdateStatus = Text("", 12);
+        stack.Children.Add(upstreamUpdateStatus);
+        stack.Children.Add(desktopUpdateStatus);
+        RefreshUpdateDisplay();
         page.Children.Add(Panel(stack));
     }
     private void FakeSettings()
@@ -289,7 +292,6 @@ public sealed partial class MainWindow
         stack.Children.Add(Text("bol-van — автор zapret: github.com/bol-van/zapret", 14));
         stack.Children.Add(Text("Flowseal — автор Windows-сборки zapret-discord-youtube: github.com/Flowseal/zapret-discord-youtube", 14));
         stack.Children.Add(Text("fecset — автор Zapret Desktop: github.com/fecset/zapret-desktop", 14));
-        stack.Children.Add(Text("Zapret Desktop — отдельный графический интерфейс к этим проектам.", 13, color: MutedBrush));
         page.Children.Add(Panel(stack));
     }
     private TextBox Input(string hint, double width) => new()

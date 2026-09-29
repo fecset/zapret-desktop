@@ -91,6 +91,7 @@ public sealed record UpdateInfo(string Product, string LocalVersion, string Late
 public interface IUpdateService
 {
     Task<UpdateInfo> CheckUpstreamAsync(CancellationToken cancellationToken = default);
+    Task<UpdateInfo> CheckDesktopAsync(string localVersion, CancellationToken cancellationToken = default);
 }
 public sealed record StrategyTestResult(string? BestStrategy, string ResultFile, bool Cancelled = false);
 public interface IStrategyTester
