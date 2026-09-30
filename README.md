@@ -59,7 +59,7 @@ dotnet test ZapretDesktop.slnx -c Release
 
 Для локального запуска используйте `dotnet run --project src/Zapret.Desktop/Zapret.Desktop.csproj`. Устройство решения кратко описано в [ARCHITECTURE.md](ARCHITECTURE.md).
 
-Для релизной сборки выполните `dotnet publish src/Zapret.Desktop/Zapret.Desktop.csproj -p:PublishProfile=WinX64 -o dist/ZapretDesktop-win-x64`. Профиль объединяет .NET и Avalonia в `Zapret.Desktop.exe`; рядом остаётся только папка `zapret` с необходимыми файлами движка и стратегиями. Тексты лицензий и уведомлений остаются в исходном коде.
+Для релизной сборки выполните `dotnet publish src/Zapret.Desktop/Zapret.Desktop.csproj -p:PublishProfile=WinX64 -o dist/ZapretDesktop-win-x64`. Профиль объединяет .NET и Avalonia в `Zapret.Desktop.exe`; рядом находятся папка `zapret` с файлами движка и стратегиями, `LICENSE`, `THIRD_PARTY_NOTICES.md` и папка `licenses` с текстами лицензий. Эти файлы также копируются в папку сборки при `dotnet run`.
 
 ## ⚖️ Лицензирование
 
