@@ -16,6 +16,10 @@
     <AvaloniaResource Include="Assets/app.ico" />
     <AvaloniaResource Include="Styles/Dropdowns.axaml" />
     <None Include="../../README.md" Link="README.md" CopyToOutputDirectory="Never" CopyToPublishDirectory="Never" />
+    <None Include="../../LICENSE" Link="LICENSE" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+    <None Include="../../THIRD_PARTY_NOTICES.md" Link="THIRD_PARTY_NOTICES.md" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+    <None Include="../../zapret/LICENSE.txt" Link="licenses/Zapret-LICENSE.txt" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+    <None Include="../../licenses/**" Link="licenses/%(RecursiveDir)%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
     <None Include="../../zapret/**"
           Exclude="../../zapret/TgWsProxy_windows.exe;../../zapret/LICENSE.txt;../../zapret/lists/*.backup;../../zapret/lists/*.test-backup.txt;../../zapret/utils/*.enabled"
           Link="zapret/%(RecursiveDir)%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" ExcludeFromSingleFile="true" />
