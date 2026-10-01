@@ -85,7 +85,17 @@ public sealed class MainViewModel(IZapretDistribution distribution, IStrategyPro
     {
         process.OutputReceived += (level, line) => Avalonia.Threading.Dispatcher.UIThread.Post(() => Log(level, line));
         settings = await settingsStore.LoadAsync();
-        settings.StartWithWindows = startup.IsEnabled();
+        try
+        {
+            settings.StartWithWindows = startup.IsEnabled();
+            if (startup.MigrateLegacyRegistration())
+                Log("INFO", "Автозапуск приложения перенесён в Планировщик заданий Windows.");
+        }
+        catch (Exception ex)
+        {
+            Log("WARN", "Не удалось обновить автозапуск приложения: " + ex.Message);
+            Message = "Не удалось обновить автозапуск. Повторно сохраните настройки: " + ex.Message;
+        }
         OnPropertyChanged(nameof(Settings));
         foreach (var strategy in await strategies.GetStrategiesAsync()) Strategies.Add(strategy);
         SelectedStrategy = Strategies.FirstOrDefault(x => x.Id == settings.SelectedStrategyId) ?? Strategies.FirstOrDefault();
