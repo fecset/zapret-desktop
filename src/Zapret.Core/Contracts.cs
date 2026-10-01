@@ -106,6 +106,7 @@ public interface IStartupService
 {
     bool IsEnabled();
     void SetEnabled(bool enabled);
+    bool MigrateLegacyRegistration();
 }
 public interface IFakePayloadService
 {
