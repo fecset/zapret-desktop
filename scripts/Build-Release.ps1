@@ -21,11 +21,11 @@ $outputRoot = [IO.Path]::GetFullPath($OutputDirectory)
 [IO.Directory]::CreateDirectory($outputRoot) | Out-Null
 $packageName = "ZapretDesktop-v$Version-win-x64"
 $zipPath = Join-Path $outputRoot "$packageName.zip"
-$hashPath = "$zipPath.sha256"
-if ((Test-Path -LiteralPath $zipPath) -or (Test-Path -LiteralPath $hashPath)) {
+if (Test-Path -LiteralPath $zipPath) {
     throw 'A release artifact already exists. Choose an empty output directory to avoid replacing reviewed artifacts.'
 }
-$publishRoot = Join-Path $outputRoot ('.publish-' + [Guid]::NewGuid().ToString('N'))
+$temporaryRoot = [IO.Path]::GetFullPath([IO.Path]::GetTempPath()).TrimEnd([IO.Path]::DirectorySeparatorChar)
+$publishRoot = Join-Path $temporaryRoot ('ZapretDesktop-publish-' + [Guid]::NewGuid().ToString('N'))
 [IO.Directory]::CreateDirectory($publishRoot) | Out-Null
 
 try {
@@ -110,18 +110,16 @@ try {
     }
     finally { $archive.Dispose() }
     $hash = (Get-FileHash -LiteralPath $zipPath -Algorithm SHA256).Hash.ToLowerInvariant()
-    [IO.File]::WriteAllText($hashPath, "$hash  $([IO.Path]::GetFileName($zipPath))`n", [Text.UTF8Encoding]::new($false))
     Write-Output "Verified release: $zipPath"
     Write-Output "SHA-256: $hash"
 }
 catch {
     if (Test-Path -LiteralPath $zipPath -PathType Leaf) { Remove-Item -LiteralPath $zipPath -Force }
-    if (Test-Path -LiteralPath $hashPath -PathType Leaf) { Remove-Item -LiteralPath $hashPath -Force }
     throw
 }
 finally {
     $resolvedPublish = [IO.Path]::GetFullPath($publishRoot)
-    if (-not $resolvedPublish.StartsWith($outputRoot.TrimEnd([IO.Path]::DirectorySeparatorChar) + [IO.Path]::DirectorySeparatorChar,
+    if (-not $resolvedPublish.StartsWith($temporaryRoot + [IO.Path]::DirectorySeparatorChar,
         [StringComparison]::OrdinalIgnoreCase)) { throw 'Temporary publish cleanup path escaped the release directory.' }
     if (Test-Path -LiteralPath $resolvedPublish) { Remove-Item -LiteralPath $resolvedPublish -Recurse -Force }
 }
