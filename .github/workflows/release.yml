@@ -89,4 +89,9 @@ jobs:
         run: |
           set -euo pipefail
           printf '%s  %s\n' "$PACKAGE_SHA256" "ZapretDesktop-$RELEASE_TAG-win-x64.zip" | sha256sum --check --strict
-          gh release create "$RELEASE_TAG" ./*.zip --verify-tag --title "Zapret Desktop $RELEASE_TAG" --notes-file "../docs/releases/$RELEASE_TAG.md"
+          if gh release view "$RELEASE_TAG" > /dev/null 2>&1; then
+            gh release upload "$RELEASE_TAG" ./*.zip --clobber
+            gh release edit "$RELEASE_TAG" --title "Zapret Desktop $RELEASE_TAG" --notes-file "../docs/releases/$RELEASE_TAG.md"
+          else
+            gh release create "$RELEASE_TAG" ./*.zip --verify-tag --title "Zapret Desktop $RELEASE_TAG" --notes-file "../docs/releases/$RELEASE_TAG.md"
+          fi
