@@ -1,9 +1,60 @@
 using Zapret.Core;
+using Zapret.Infrastructure;
 
 namespace Zapret.Desktop.Tests;
 
 public sealed class FeatureTests
 {
+    [Fact]
+    public async Task DiagnosticReportOffersRemediationOnlyForFailedChecks()
+    {
+        using var app = new TestApplication(new ReportDiagnostic());
+        await app.ViewModel.DiagnoseAsync();
+        var report = app.ViewModel.BuildDiagnosticReport();
+        Assert.Contains("OK Hosts: Alternative addresses", report);
+        Assert.DoesNotContain("Remove hosts entries", report);
+        Assert.Contains("FAIL DNS: No response — Check DNS", report);
+    }
+
+    private sealed class ReportDiagnostic : IDiagnosticService
+    {
+        public Task<IReadOnlyList<DiagnosticItem>> RunAsync(CancellationToken cancellationToken = default) =>
+            Task.FromResult<IReadOnlyList<DiagnosticItem>>([new("Hosts", true, "Alternative addresses", "Remove hosts entries"),
+                new("DNS", false, "No response", "Check DNS")]);
+    }
+
+    [Fact]
+    public async Task ApplyingHostsRefreshesAnExistingDiagnosticReport()
+    {
+        var diagnostic = new HostsDiagnostic();
+        using var client = new HttpClient(new HostsResponse());
+        using var app = new TestApplication(diagnostic, updateClient: client);
+        diagnostic.Path = app.HostsPath;
+        File.WriteAllText(app.HostsPath, "127.0.0.1 localhost\n");
+        await app.ViewModel.InitializeAsync();
+        await app.ViewModel.DiagnoseAsync();
+        Assert.False(Assert.Single(app.ViewModel.Diagnostics).Passed);
+        await app.ViewModel.PreviewHostsAsync();
+        Assert.Equal("127.0.0.1 localhost\n", File.ReadAllText(app.HostsPath));
+        await app.ViewModel.ApplyHostsAsync();
+        Assert.Contains("162.159.138.232 discord.com", File.ReadAllText(app.HostsPath));
+        Assert.True(Assert.Single(app.ViewModel.Diagnostics).Passed);
+        Assert.Null(app.ViewModel.HostsPreview);
+    }
+
+    private sealed class HostsDiagnostic : IDiagnosticService
+    {
+        public string Path { get; set; } = "";
+        public Task<IReadOnlyList<DiagnosticItem>> RunAsync(CancellationToken cancellationToken = default) =>
+            Task.FromResult<IReadOnlyList<DiagnosticItem>>([new("Hosts", File.ReadAllText(Path).Contains("162.159.138.232 discord.com"), "Current hosts", "")]);
+    }
+
+    private sealed class HostsResponse : HttpMessageHandler
+    {
+        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken) =>
+            Task.FromResult(new HttpResponseMessage(System.Net.HttpStatusCode.OK) { Content = new StringContent("162.159.138.232 discord.com\n") });
+    }
+
     [Fact]
     public async Task ApplyingFiltersAndStrategyToServiceRefreshesConnectionHealth()
     {

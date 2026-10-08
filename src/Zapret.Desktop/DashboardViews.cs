@@ -202,11 +202,7 @@ public sealed partial class MainWindow
             row.Children.Add(actions);
             strategyCards.Children.Add(Panel(row, 16));
         }
-        FillRemainingHeight(Panel(new ScrollViewer
-        {
-            Content = strategyCards,
-            VerticalScrollBarVisibility = Avalonia.Controls.Primitives.ScrollBarVisibility.Auto
-        }, 10));
+        page.Children.Add(Panel(strategyCards, 10));
         RefreshStrategyResults();
     }
 

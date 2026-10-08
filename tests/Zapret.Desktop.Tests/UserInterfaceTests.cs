@@ -51,12 +51,16 @@ public sealed class UserInterfaceTests
     }
 
     [AvaloniaFact]
-    public async Task ComparingPayloadKeepsSelectedGameTargetAndSource()
+    public async Task PayloadReplacementCanBeUndoneWithoutChoosingTechnicalTargets()
     {
-        using var app = new TestApplication(payloadRecovery: new PayloadRecovery());
+        using var app = new TestApplication(featureServices: true);
         Directory.CreateDirectory(app.Distribution.BinDirectory);
         File.WriteAllBytes(Path.Combine(app.Distribution.BinDirectory, "a.bin"), [1]);
         File.WriteAllBytes(Path.Combine(app.Distribution.BinDirectory, "b.bin"), [2]);
+        var discord = Path.Combine(app.Distribution.BinDirectory, "ACTIVE_DISCORD_UDP.bin");
+        var game = Path.Combine(app.Distribution.BinDirectory, "ACTIVE_GAME_UDP.bin");
+        File.WriteAllBytes(discord, [9]);
+        File.WriteAllBytes(game, [8]);
         await app.Settings.SaveAsync(new DesktopSettings { CheckUpdates = false }, TestContext.Current.CancellationToken);
         var window = new MainWindow(app.ViewModel);
         window.Show();
@@ -64,16 +68,158 @@ public sealed class UserInterfaceTests
         window.GetLogicalDescendants().OfType<Button>().Single(button =>
             button.GetLogicalDescendants().OfType<TextBlock>().Any(text => text.Text == "Настройки"))
             .RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
-        var combos = window.GetLogicalDescendants().OfType<ComboBox>().ToArray();
-        combos.Single(combo => combo.Items.Contains("ACTIVE_GAME_UDP.bin")).SelectedItem = "ACTIVE_GAME_UDP.bin";
-        combos.Single(combo => combo.Items.Contains("b.bin")).SelectedItem = "b.bin";
-        window.GetLogicalDescendants().OfType<Button>().Single(button => button.Content as string == "Сравнить SHA-256")
+        Assert.DoesNotContain(window.GetLogicalDescendants().OfType<Button>(), button =>
+            button.Content as string == "Отменить замену для Discord");
+        window.GetLogicalDescendants().OfType<ComboBox>().Single(combo => combo.Items.Contains("b.bin")).SelectedItem = "b.bin";
+        window.GetLogicalDescendants().OfType<Button>().Single(button => button.Content as string == "Применить для Discord")
             .RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
-        await WaitForAsync(() => window.GetLogicalDescendants().OfType<TextBlock>().Any(text => text.Text == "Проверен: ACTIVE_GAME_UDP.bin"));
-        Assert.Equal("ACTIVE_GAME_UDP.bin", window.GetLogicalDescendants().OfType<ComboBox>()
-            .Single(combo => combo.Items.Contains("ACTIVE_GAME_UDP.bin")).SelectedItem);
+        await WaitForAsync(() => window.GetLogicalDescendants().OfType<Button>().Any(button =>
+            button.Content as string == "Отменить замену для Discord"));
+        Assert.Equal(new byte[] { 2 }, File.ReadAllBytes(discord));
         Assert.Equal("b.bin", window.GetLogicalDescendants().OfType<ComboBox>().Single(combo => combo.Items.Contains("b.bin")).SelectedItem);
+        Assert.DoesNotContain(window.GetLogicalDescendants().OfType<Button>(), button => button.Content as string == "Сравнить SHA-256");
+        window.GetLogicalDescendants().OfType<Button>().Single(button => button.Content as string == "Отменить замену для Discord")
+            .RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+        await WaitForAsync(() => !app.ViewModel.Busy && File.ReadAllBytes(discord).SequenceEqual(new byte[] { 9 }));
+        Dispatcher.UIThread.RunJobs();
+        Assert.DoesNotContain(window.GetLogicalDescendants().OfType<Button>(), button =>
+            button.Content as string == "Отменить замену для Discord");
+        Assert.Equal(new byte[] { 8 }, File.ReadAllBytes(game));
         window.Hide();
+    }
+
+    [AvaloniaFact]
+    public Task CreatingBackupKeepsSettingsScrollPosition() => AssertSettingsActionKeepsScrollAsync("Создать копию");
+
+    [AvaloniaFact]
+    public Task SavingSettingsKeepsScrollPositionAfterRebuildingTheTheme() => AssertSettingsActionKeepsScrollAsync("Сохранить настройки");
+
+    private static async Task AssertSettingsActionKeepsScrollAsync(string label)
+    {
+        using var app = new TestApplication(featureServices: true);
+        await app.Settings.SaveAsync(new DesktopSettings { CheckUpdates = false }, TestContext.Current.CancellationToken);
+        var window = new MainWindow(app.ViewModel);
+        window.Show();
+        await WaitForAsync(() => app.ViewModel.Strategies.Count > 0 && !app.ViewModel.Busy);
+        Navigate(window, "Настройки");
+        window.UpdateLayout();
+        var scroll = PageScroll(window);
+        var action = window.GetLogicalDescendants().OfType<Button>().Single(button => button.Content as string == label);
+        action.Focus();
+        action.BringIntoView();
+        Dispatcher.UIThread.RunJobs();
+        window.UpdateLayout();
+        var offset = scroll.Offset.Y;
+        Assert.True(offset > 0);
+        action.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+        await WaitForAsync(() => app.ViewModel.Backups.Count > 0 && !app.ViewModel.Busy);
+        Dispatcher.UIThread.RunJobs();
+        window.UpdateLayout();
+        Assert.Equal(offset, PageScroll(window).Offset.Y);
+        window.Hide();
+    }
+
+    [AvaloniaFact]
+    public async Task BackgroundStatusRefreshKeepsScrollAndNavigationStartsAtTop()
+    {
+        using var app = new TestApplication();
+        await app.Settings.SaveAsync(new DesktopSettings { CheckUpdates = false }, TestContext.Current.CancellationToken);
+        var window = new MainWindow(app.ViewModel);
+        window.Show();
+        await WaitForAsync(() => app.ViewModel.Strategies.Count > 0 && !app.ViewModel.Busy);
+        window.Height = 620;
+        window.UpdateLayout();
+        var scroll = PageScroll(window);
+        scroll.Offset = new Vector(0, 150);
+        window.UpdateLayout();
+        Assert.Equal(150, scroll.Offset.Y);
+        app.Process.NormalState = ZapretRunState.External;
+        await app.ViewModel.RefreshAsync();
+        Dispatcher.UIThread.RunJobs();
+        window.UpdateLayout();
+        Assert.Equal(150, PageScroll(window).Offset.Y);
+        Navigate(window, "Настройки");
+        window.UpdateLayout();
+        Assert.Equal(0, PageScroll(window).Offset.Y);
+        window.Hide();
+    }
+
+    private static ScrollViewer PageScroll(Window window) => window.GetLogicalDescendants().OfType<ScrollViewer>()
+        .First(scroll => scroll.Content is StackPanel);
+
+    [AvaloniaFact]
+    public async Task LongHistoryResultLeavesTheWholeStrategiesPageScrollable()
+    {
+        using var app = new TestApplication(featureServices: true);
+        await app.Settings.SaveAsync(new DesktopSettings { CheckUpdates = false }, TestContext.Current.CancellationToken);
+        var window = new MainWindow(app.ViewModel);
+        window.Show();
+        await WaitForAsync(() => app.ViewModel.Strategies.Count > 0 && !app.ViewModel.Busy);
+        app.Tester.Result = new("general.bat", "", false);
+        app.Tester.ReportChecks = progress =>
+        {
+            for (var i = 0; i < 30; i++) progress.Report(new($"general-{i}.bat", StrategyCheckState.Completed, 36, 0, 16, 0));
+        };
+        app.Tester.Cleanup.TrySetResult();
+        await app.ViewModel.TestStrategiesAsync();
+        Navigate(window, "Стратегии");
+        var open = window.GetLogicalDescendants().OfType<Button>().Single(button => button.Content as string == "Открыть результат");
+        open.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+        await WaitForAsync(() => app.ViewModel.HistoryDetails is not null && !app.ViewModel.Busy);
+        Dispatcher.UIThread.RunJobs();
+        window.UpdateLayout();
+        var scroll = PageScroll(window);
+        var currentOpen = window.GetLogicalDescendants().OfType<Button>().Single(button => button.Content as string == "Открыть результат");
+        Assert.Contains(currentOpen, scroll.GetLogicalDescendants());
+        Assert.True(scroll.Extent.Height > scroll.Viewport.Height);
+        scroll.ScrollToEnd();
+        window.UpdateLayout();
+        var lastStart = window.GetLogicalDescendants().OfType<Button>().Last(button => button.Content as string == "Запустить");
+        var position = lastStart.TranslatePoint(new Point(0, 0), scroll);
+        Assert.NotNull(position);
+        Assert.InRange(position.Value.Y, 0, scroll.Bounds.Height - lastStart.Bounds.Height);
+        window.Hide();
+    }
+
+    private static void Navigate(Window window, string section) => window.GetLogicalDescendants().OfType<Button>().Single(button =>
+        button.GetLogicalDescendants().OfType<TextBlock>().Any(text => text.Text == section))
+        .RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+
+    [AvaloniaFact]
+    public async Task HostsCompletionRefreshesDiagnosticsWhenTheUserOpensThatPageDuringTheUpdate()
+    {
+        var diagnostic = new DelayedDiagnostic();
+        using var client = new HttpClient(new HostsResponse());
+        using var app = new TestApplication(diagnostic, updateClient: client);
+        await app.Settings.SaveAsync(new DesktopSettings { CheckUpdates = false }, TestContext.Current.CancellationToken);
+        var window = new MainWindow(app.ViewModel);
+        window.Show();
+        await WaitForAsync(() => app.ViewModel.Strategies.Count > 0 && !app.ViewModel.Busy);
+        await app.ViewModel.DiagnoseAsync();
+        await app.ViewModel.PreviewHostsAsync();
+        diagnostic.Defer = true;
+        var applying = app.ViewModel.ApplyHostsAsync();
+        await WaitForAsync(() => app.ViewModel.HostsPreview is null && app.ViewModel.Busy);
+        Navigate(window, "Диагностика");
+        Assert.Contains(window.GetLogicalDescendants().OfType<TextBlock>(), text => text.Text == "Old hosts report");
+        diagnostic.Completion.SetResult([new("Hosts", true, "Updated hosts report", "")]);
+        await applying;
+        await WaitForAsync(() => window.GetLogicalDescendants().OfType<TextBlock>().Any(text => text.Text == "Updated hosts report"));
+        window.Hide();
+    }
+
+    private sealed class DelayedDiagnostic : IDiagnosticService
+    {
+        public bool Defer { get; set; }
+        public TaskCompletionSource<IReadOnlyList<DiagnosticItem>> Completion { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public Task<IReadOnlyList<DiagnosticItem>> RunAsync(CancellationToken cancellationToken = default) =>
+            Defer ? Completion.Task : Task.FromResult<IReadOnlyList<DiagnosticItem>>([new("Hosts", false, "Old hosts report", "")]);
+    }
+
+    private sealed class HostsResponse : HttpMessageHandler
+    {
+        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken) =>
+            Task.FromResult(new HttpResponseMessage(System.Net.HttpStatusCode.OK) { Content = new StringContent("162.159.138.232 discord.com\n") });
     }
 
     [AvaloniaFact]
@@ -149,10 +295,4 @@ public sealed class UserInterfaceTests
             Task.FromResult<IReadOnlyList<DiagnosticItem>>([new("Diagnostic probe passed", true, "Current report", "")]);
     }
 
-    private sealed class PayloadRecovery : IPayloadRecoveryService
-    {
-        public Task<PayloadInspection> InspectAsync(string target, string? source = null, CancellationToken cancellationToken = default) =>
-            Task.FromResult(new PayloadInspection(target, source, "target-hash", "source-hash", "original-hash", false, true));
-        public Task RestoreOriginalAsync(string target, CancellationToken cancellationToken = default) => Task.CompletedTask;
-    }
 }

@@ -6,6 +6,20 @@ namespace Zapret.Core.Tests;
 
 public sealed class DiagnosticTests
 {
+    [Theory]
+    [InlineData("162.159.138.232 discord.com\n", true)]
+    [InlineData("# BEGIN Zapret Desktop managed hosts\n162.159.138.232 discord.com\n# END Zapret Desktop managed hosts\n", true)]
+    [InlineData("0.0.0.0 discord.com\n", false)]
+    [InlineData("# BEGIN Zapret Desktop managed hosts\n127.0.0.1 discord.com\n# END Zapret Desktop managed hosts\n", false)]
+    [InlineData(":: discord.com\n", false)]
+    public async Task AlternativeHostsAddressesAreNotErrorsButBlockingAddressesRemainErrors(string hosts, bool passed)
+    {
+        var service = new DiagnosticService(new ZapretDistribution(Path.GetTempPath()), new EmptyStrategies(),
+            new Privilege(), new ActiveProcess(), new FakeSystem { Hosts = hosts });
+        var result = await service.RunAsync();
+        Assert.Equal(passed, Assert.Single(result, item => item.Name == "Hosts").Passed);
+    }
+
     [Fact]
     public async Task RuntimeFailureIsReportedWithoutDiscardingTheOtherDiagnostics()
     {

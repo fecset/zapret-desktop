@@ -46,7 +46,6 @@ public sealed partial class MainWindow : Window
     private bool exitAllowed;
     private bool exitInProgress;
     private bool openedOnce;
-    private string payloadTargetSelection = "ACTIVE_DISCORD_UDP.bin";
     private string? payloadSourceSelection;
 
     private bool IsLight => vm.Settings.Theme == "Light" ||
@@ -157,6 +156,8 @@ public sealed partial class MainWindow : Window
                 Show(currentPage);
             else if (e.PropertyName == nameof(MainViewModel.Status) && currentPage is "Главная" or "Стратегии")
                 Show(currentPage);
+            else if (e.PropertyName == nameof(MainViewModel.Diagnostics) && currentPage == "Диагностика")
+                Show(currentPage);
         });
 
     private void BuildShell()
@@ -264,8 +265,9 @@ public sealed partial class MainWindow : Window
             button.FontWeight = name == currentPage ? FontWeight.SemiBold : FontWeight.Normal;
         }
     }
-    private void Show(string name)
+    private void Show(string name, Vector? scrollOffset = null)
     {
+        var offset = scrollOffset ?? (name == currentPage ? contentScroll.Offset : default);
         currentPage = name;
         DetachPage();
         page.Children.Clear();
@@ -282,6 +284,10 @@ public sealed partial class MainWindow : Window
             case "Настройки": BuildSettings(); break;
         }
         footer.Text = vm.Message;
+        // Reattaching the content clears its extent. Restore only after the new
+        // page has been measured, otherwise ScrollViewer clamps the offset to zero.
+        UpdateLayout();
+        contentScroll.Offset = offset;
     }
 
     private async Task CheckAndOpenUpdatesAsync()
@@ -409,12 +415,13 @@ public sealed partial class MainWindow : Window
     };
     private void ApplyTheme()
     {
+        var offset = contentScroll.Offset;
         Application.Current!.RequestedThemeVariant = vm.Settings.Theme switch
         {
             "Light" => ThemeVariant.Light, "Dark" => ThemeVariant.Dark, _ => ThemeVariant.Default
         };
         BuildShell();
-        Show(currentPage);
+        Show(currentPage, offset);
     }
     private static string ServiceLabel(string? state) => state switch
     {

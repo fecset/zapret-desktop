@@ -11,7 +11,8 @@ public sealed partial class MainViewModel
     private ManagedUpdateResult? lastDistributionUpdate;
     private IpSetUpdatePlan? ipSetUpdatePlan;
     private HostsUpdatePreview? hostsPreview;
-    private PayloadInspection? payloadInspection;
+    private IReadOnlyDictionary<string, PayloadInspection> payloadStates = new Dictionary<string, PayloadInspection>();
+    private DataUpdateResult? hostsUpdateResult;
     private StrategyHistoryDetails? historyDetails;
     public ObservableCollection<UserDataBackupInfo> Backups { get; } = [];
     public ObservableCollection<StrategyHistoryEntry> TestHistory { get; } = [];
@@ -21,7 +22,8 @@ public sealed partial class MainViewModel
     public ManagedUpdateResult? LastDistributionUpdate { get => lastDistributionUpdate; private set => SetProperty(ref lastDistributionUpdate, value); }
     public IpSetUpdatePlan? IpSetUpdatePlan { get => ipSetUpdatePlan; private set => SetProperty(ref ipSetUpdatePlan, value); }
     public HostsUpdatePreview? HostsPreview { get => hostsPreview; private set => SetProperty(ref hostsPreview, value); }
-    public PayloadInspection? PayloadInspection { get => payloadInspection; private set => SetProperty(ref payloadInspection, value); }
+    public IReadOnlyDictionary<string, PayloadInspection> PayloadStates { get => payloadStates; private set => SetProperty(ref payloadStates, value); }
+    public DataUpdateResult? HostsUpdateResult { get => hostsUpdateResult; private set => SetProperty(ref hostsUpdateResult, value); }
     public StrategyHistoryDetails? HistoryDetails { get => historyDetails; private set => SetProperty(ref historyDetails, value); }
     public string RunningStrategyName => Status?.StrategyId is { } id
         ? Strategies.FirstOrDefault(item => item.Id.Equals(id, StringComparison.OrdinalIgnoreCase))?.DisplayName ?? id
@@ -41,6 +43,7 @@ public sealed partial class MainViewModel
                 TestHistory.Clear();
                 foreach (var item in await history.GetHistoryAsync()) TestHistory.Add(item);
             }
+            await LoadPayloadStatesAsync();
         }
         catch (Exception ex) { Log("WARN", "Не удалось прочитать резервные копии или историю: " + ex.Message); }
     }
@@ -116,15 +119,21 @@ public sealed partial class MainViewModel
         OnPropertyChanged(nameof(DistributionProblems));
         OnPropertyChanged(nameof(UpstreamVersion));
     }
-    public Task InspectPayloadAsync(string target, string? source) => RunAsync(async () =>
-        PayloadInspection = await Required(payloadRecovery).InspectAsync(target, source));
+    private async Task LoadPayloadStatesAsync()
+    {
+        if (payloadRecovery is null) return;
+        var states = new Dictionary<string, PayloadInspection>(StringComparer.OrdinalIgnoreCase);
+        foreach (var target in new[] { "ACTIVE_DISCORD_UDP.bin", "ACTIVE_GAME_UDP.bin" })
+            states[target] = await payloadRecovery.InspectAsync(target);
+        PayloadStates = states;
+    }
     public Task RestorePayloadAsync(string target) => RunAsync(async () =>
     {
         await RequireStoppedForFilesAsync();
         await BackupBeforeChangeAsync("Перед восстановлением " + target);
         await Required(payloadRecovery).RestoreOriginalAsync(target);
-        PayloadInspection = await Required(payloadRecovery).InspectAsync(target);
-        Message = "Исходный payload восстановлен";
+        await LoadPayloadStatesAsync();
+        Message = "Замена файла отменена. Перезапустите стратегию, чтобы применить изменение.";
     });
     public Task CheckConnectionAsync() => RunAsync(async () =>
     {
@@ -139,6 +148,7 @@ public sealed partial class MainViewModel
     }
     public Task ShowHistoryAsync(string id) => RunAsync(async () =>
         HistoryDetails = await Required(history).GetDetailsAsync(id));
+    public void CloseHistory() => HistoryDetails = null;
     public Task ApplyRecommendationAsync(string? recommended = null) => RunAsync(async () =>
     {
         var file = recommended ?? BestTestStrategy;
@@ -233,13 +243,20 @@ public sealed partial class MainViewModel
         Message = result.Summary;
     });
     public Task PreviewHostsAsync() => RunAsync(async () =>
-        HostsPreview = await Required(managedUpdates).PreviewHostsAsync());
+    {
+        HostsPreview = await Required(managedUpdates).PreviewHostsAsync();
+        HostsUpdateResult = null;
+        Message = "Предпросмотр готов. Файл hosts ещё не изменён.";
+    });
     public Task ApplyHostsAsync() => RunAsync(async () =>
     {
         await RequireStoppedForFilesAsync();
         var result = await Required(managedUpdates).ApplyHostsAsync(
             HostsPreview ?? throw new InvalidOperationException("Сначала просмотрите изменения hosts."));
         HostsPreview = null;
+        HostsUpdateResult = result;
+        Message = result.Summary + " Обновляем диагностику...";
+        if (diagnostics is not null) await RefreshDiagnosticsCoreAsync();
         Message = result.Summary;
     });
     private static T Required<T>(T? instance) where T : class =>

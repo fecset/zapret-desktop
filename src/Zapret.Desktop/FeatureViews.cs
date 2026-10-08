@@ -105,6 +105,14 @@ public sealed partial class MainWindow
             });
         }
         stack.Children.Add(row);
+        page.Children.Add(Panel(stack));
+    }
+
+    private void NetworkDataSettings()
+    {
+        var stack = new StackPanel { Spacing = 10 };
+        stack.Children.Add(Text("Сетевые списки и адреса", 17, FontWeight.SemiBold));
+        stack.Children.Add(Text("IPSet — список IP-адресов для фильтрации трафика. Загрузка подготавливает список; установка выполняется кнопкой «Применить IPSet».", 12, color: MutedBrush));
         var data = new WrapPanel { Orientation = Orientation.Horizontal };
         AddFeatureAction(data, "Загрузить IPSet", vm.PrepareIpSetUpdateAsync);
         if (vm.IpSetUpdatePlan is { } ipset)
@@ -112,46 +120,51 @@ public sealed partial class MainWindow
             stack.Children.Add(Text(ipset.Summary + $" · {ipset.EntryCount} записей", 12));
             AddFeatureAction(data, "Применить IPSet", vm.ApplyIpSetUpdateAsync);
         }
-        AddFeatureAction(data, "Предпросмотр hosts", vm.PreviewHostsAsync);
         stack.Children.Add(data);
+        stack.Children.Add(Text("Адреса YouTube и Discord (hosts)", 15, FontWeight.SemiBold));
+        stack.Children.Add(Text("hosts позволяет задать адреса сайтов вручную, вместо получения через DNS. Здесь можно добавить записи из проекта zapret. Это отдельная настройка Windows, а не исправление всех замечаний диагностики.", 12, color: MutedBrush));
+        var hostsActions = new WrapPanel();
+        AddFeatureAction(hostsActions, "Показать изменения hosts", vm.PreviewHostsAsync);
+        stack.Children.Add(hostsActions);
         if (vm.HostsPreview is { } hosts)
         {
+            stack.Children.Add(Text("Предпросмотр — файл ещё не изменён. Сравните вкладки и примените изменения, если хотите использовать эти адреса.", 12, color: MutedBrush));
             stack.Children.Add(Text(hosts.Summary, 12));
             var tabs = new TabControl
             {
                 ItemsSource = new[]
                 {
                     new TabItem { Header = "Текущий hosts", Content = ReportBox(hosts.CurrentContent) },
-                    new TabItem { Header = "После применения", Content = ReportBox(hosts.ProposedContent) }
+                    new TabItem { Header = "Будет после применения", Content = ReportBox(hosts.ProposedContent) }
                 }
             };
             stack.Children.Add(tabs);
-            stack.Children.Add(Button("Применить показанные изменения hosts", async () =>
+            stack.Children.Add(Text("Для применения нужны права администратора. Сначала остановите Zapret и службу; текущий файл будет сохранён в резервную копию.", 12, color: MutedBrush));
+            stack.Children.Add(Button("Применить изменения hosts", async () =>
             {
                 await vm.ApplyHostsAsync();
                 if (currentPage == "Настройки") Show("Настройки");
-            }, danger: true));
+            }, primary: true));
+        }
+        if (vm.HostsUpdateResult is { } result)
+        {
+            stack.Children.Add(Text(result.Summary, 12, color: GoodBrush));
+            stack.Children.Add(Text("Записи установлены. Перезапустите браузер и проверьте соединение на главной странице. Другие замечания диагностики проверяются отдельно.", 12, color: MutedBrush));
         }
         page.Children.Add(Panel(stack));
     }
 
-    private void PayloadRecoveryControls(StackPanel stack, ComboBox source)
+    private void PayloadRecoveryControls(StackPanel stack)
     {
-        var target = Dropdown(new[] { "ACTIVE_DISCORD_UDP.bin", "ACTIVE_GAME_UDP.bin" }, payloadTargetSelection, 300);
-        target.SelectionChanged += (_, _) => payloadTargetSelection = target.SelectedItem as string ?? "ACTIVE_DISCORD_UDP.bin";
-        stack.Children.Add(target);
         var row = new WrapPanel { Orientation = Orientation.Horizontal };
-        AddFeatureAction(row, "Сравнить SHA-256", () => vm.InspectPayloadAsync(target.SelectedItem as string ?? "", source.SelectedItem as string));
-        AddFeatureAction(row, "Восстановить исходный payload", () => vm.RestorePayloadAsync(target.SelectedItem as string ?? ""));
-        stack.Children.Add(row);
-        if (vm.PayloadInspection is { } info)
+        foreach (var (target, label) in new[] { ("ACTIVE_DISCORD_UDP.bin", "Discord"), ("ACTIVE_GAME_UDP.bin", "игр") })
         {
-            stack.Children.Add(Text("Проверен: " + info.TargetName, 12));
-            stack.Children.Add(Text("Текущий SHA-256: " + (info.TargetSha256 ?? "файл отсутствует"), 11, color: MutedBrush));
-            stack.Children.Add(Text("Выбранный SHA-256: " + (info.SourceSha256 ?? "не выбран"), 11, color: MutedBrush));
-            stack.Children.Add(Text("Исходный SHA-256: " + (info.OriginalSha256 ?? "копия исходного файла отсутствует"), 11, color: MutedBrush));
-            stack.Children.Add(Text(info.MatchesSource ? "Файлы совпадают" : "Файлы различаются", 12));
+            if (vm.PayloadStates.TryGetValue(target, out var state) && state.CanRestore && !state.IsOriginal)
+                AddFeatureAction(row, "Отменить замену для " + label, () => vm.RestorePayloadAsync(target));
         }
+        if (row.Children.Count == 0) return;
+        stack.Children.Add(Text("Если после замены связь стала хуже, можно вернуть сохранённый исходный файл. Сначала остановите Zapret и службу.", 12, color: MutedBrush));
+        stack.Children.Add(row);
     }
 
     private void StrategyHistoryPanel()
@@ -176,9 +189,21 @@ public sealed partial class MainWindow
         if (vm.HistoryDetails is { } details)
         {
             stack.Children.Add(Text(details.Entry.ReportStatus, 12, color: MutedBrush));
+            var checks = new StackPanel { Spacing = 8 };
             foreach (var check in details.Entry.Checks)
-                stack.Children.Add(Text($"{check.FileName}: {check.State} · HTTP/TLS {check.HttpOk}/{check.HttpFailed} · Ping {check.PingOk}/{check.PingFailed}", 11));
-            stack.Children.Add(ReportBox(details.ReportText));
+            {
+                var state = check.State switch
+                {
+                    StrategyCheckState.Completed => "завершён", StrategyCheckState.Failed => "ошибка запуска",
+                    StrategyCheckState.Cancelled => "прерван", StrategyCheckState.Running => "проверяется", _ => "ожидает проверки"
+                };
+                checks.Children.Add(Text($"{check.FileName}: {state} · HTTP/TLS: {check.HttpOk} успешно, {check.HttpFailed} ошибок · Ping: {check.PingOk} ответов, {check.PingFailed} без ответа", 11));
+            }
+            stack.Children.Add(new ScrollViewer { Content = checks, MaxHeight = 240,
+                VerticalScrollBarVisibility = Avalonia.Controls.Primitives.ScrollBarVisibility.Auto });
+            stack.Children.Add(new Expander { Header = "Подробный отчёт", HorizontalAlignment = HorizontalAlignment.Stretch,
+                Content = ReportBox(details.ReportText) });
+            stack.Children.Add(Button("Скрыть результат", () => { vm.CloseHistory(); Show("Стратегии"); return Task.CompletedTask; }));
         }
         page.Children.Add(Panel(stack, 16));
     }
