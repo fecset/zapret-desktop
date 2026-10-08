@@ -74,13 +74,16 @@ try {
     Copy-Item -LiteralPath (Join-Path $repositoryRoot 'LICENSE') -Destination (Join-Path $publishRoot 'LICENSE') -Force
     Copy-Item -LiteralPath (Join-Path $repositoryRoot 'THIRD_PARTY_NOTICES.md') -Destination (Join-Path $publishRoot 'THIRD_PARTY_NOTICES.md') -Force
     Copy-Item -LiteralPath (Join-Path $repositoryRoot 'README.md') -Destination (Join-Path $publishRoot 'README.md') -Force
-    Copy-Item -LiteralPath (Join-Path $repositoryRoot "docs/releases/v$Version.md") -Destination (Join-Path $publishRoot 'RELEASE_NOTES.md') -Force
+    $releaseNotesPath = Join-Path $repositoryRoot "docs/releases/v$Version.md"
+    if (Test-Path -LiteralPath $releaseNotesPath -PathType Leaf) {
+        Copy-Item -LiteralPath $releaseNotesPath -Destination (Join-Path $publishRoot 'RELEASE_NOTES.md') -Force
+    }
     [IO.Directory]::CreateDirectory((Join-Path $publishRoot 'licenses')) | Out-Null
     Copy-Item -LiteralPath (Join-Path $distributionSource 'LICENSE.txt') -Destination (Join-Path $publishRoot 'licenses/Zapret-LICENSE.txt') -Force
     foreach ($license in Get-ChildItem -LiteralPath (Join-Path $repositoryRoot 'licenses') -File) {
         Copy-Item -LiteralPath $license.FullName -Destination (Join-Path $publishRoot 'licenses') -Force
     }
-    foreach ($required in @('Zapret.Desktop.exe', 'LICENSE', 'THIRD_PARTY_NOTICES.md', 'README.md', 'RELEASE_NOTES.md',
+    foreach ($required in @('Zapret.Desktop.exe', 'LICENSE', 'THIRD_PARTY_NOTICES.md', 'README.md',
         'licenses/Zapret-LICENSE.txt', 'licenses/WinDivert-LICENSE.txt', 'licenses/Avalonia-LICENSE.md',
         'licenses/DotNet-LICENSE.txt', 'licenses/Inter-OFL.txt', 'licenses/FluentIcons-LICENSE.txt',
         'licenses/Cygwin-LICENSE.txt', 'licenses/LGPL-3.0.txt', 'licenses/GPL-3.0.txt',
