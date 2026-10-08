@@ -64,7 +64,7 @@ public sealed class UserInterfaceTests
         await app.Settings.SaveAsync(new DesktopSettings { CheckUpdates = false }, TestContext.Current.CancellationToken);
         var window = new MainWindow(app.ViewModel);
         window.Show();
-        await WaitForAsync(() => app.ViewModel.Strategies.Count > 0);
+        await WaitForAsync(() => app.ViewModel.PayloadStates.Count == 2 && !app.ViewModel.Busy);
         window.GetLogicalDescendants().OfType<Button>().Single(button =>
             button.GetLogicalDescendants().OfType<TextBlock>().Any(text => text.Text == "Настройки"))
             .RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
@@ -85,6 +85,23 @@ public sealed class UserInterfaceTests
         Assert.DoesNotContain(window.GetLogicalDescendants().OfType<Button>(), button =>
             button.Content as string == "Отменить замену для Discord");
         Assert.Equal(new byte[] { 8 }, File.ReadAllBytes(game));
+        window.Hide();
+    }
+
+    [AvaloniaFact]
+    public async Task CompletingStartupKeepsThePageChosenWhileLoading()
+    {
+        using var app = new TestApplication(featureServices: true);
+        var startup = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        app.Tester.Recover = () => startup.Task;
+        await app.Settings.SaveAsync(new DesktopSettings { CheckUpdates = false }, TestContext.Current.CancellationToken);
+        var window = new MainWindow(app.ViewModel);
+        window.Show();
+        Navigate(window, "Настройки");
+        startup.SetResult();
+        await WaitForAsync(() => app.ViewModel.PayloadStates.Count == 2 && !app.ViewModel.Busy);
+        Dispatcher.UIThread.RunJobs();
+        Assert.Contains(window.GetLogicalDescendants().OfType<TextBlock>(), text => text.Text == "Активные fake payloads");
         window.Hide();
     }
 
