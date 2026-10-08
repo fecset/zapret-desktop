@@ -84,7 +84,6 @@ public sealed partial class MainWindow : Window
             try { await vm.InitializeAsync(); }
             catch (Exception ex) { vm.Log("ERROR", ex.ToString()); }
             ApplyTheme();
-            Show("Главная");
             statusTimer.Start();
             if (vm.Settings.CheckUpdates) await CheckAndOpenUpdatesAsync();
         };
