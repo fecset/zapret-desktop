@@ -107,7 +107,11 @@ public sealed partial class MainWindow
     {
         Heading("Диагностика", "Проверка компонентов и подсказки для устранения неполадок.");
         var actions = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 9 };
-        actions.Children.Add(Button("Проверить систему", async () => { await vm.DiagnoseAsync(); Show("Диагностика"); }, primary: true));
+        actions.Children.Add(Button("Проверить систему", async () =>
+        {
+            await vm.DiagnoseAsync();
+            if (currentPage == "Диагностика") Show("Диагностика");
+        }, primary: true));
         actions.Children.Add(Button("Скопировать отчёт", async () =>
         {
             if (Clipboard is not null) await Clipboard.SetTextAsync(vm.BuildDiagnosticReport());
@@ -172,6 +176,7 @@ public sealed partial class MainWindow
         AppSettings();
         UpdateSettings();
         ManagedUpdateSettings();
+        NetworkDataSettings();
         BackupSettings();
         FakeSettings();
         CreditsSettings();
@@ -296,10 +301,10 @@ public sealed partial class MainWindow
         source.SelectionChanged += (_, _) => payloadSourceSelection = source.SelectedItem as string;
         stack.Children.Add(source);
         var buttons = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 8 };
-        buttons.Children.Add(Button("Применить для Discord", () => vm.ReplaceFakeAsync("ACTIVE_DISCORD_UDP.bin", source.SelectedItem as string ?? "")));
-        buttons.Children.Add(Button("Применить для игр", () => vm.ReplaceFakeAsync("ACTIVE_GAME_UDP.bin", source.SelectedItem as string ?? "")));
+        AddFeatureAction(buttons, "Применить для Discord", () => vm.ReplaceFakeAsync("ACTIVE_DISCORD_UDP.bin", source.SelectedItem as string ?? ""));
+        AddFeatureAction(buttons, "Применить для игр", () => vm.ReplaceFakeAsync("ACTIVE_GAME_UDP.bin", source.SelectedItem as string ?? ""));
         stack.Children.Add(buttons);
-        PayloadRecoveryControls(stack, source);
+        PayloadRecoveryControls(stack);
         page.Children.Add(Panel(stack));
     }
     private void CreditsSettings()

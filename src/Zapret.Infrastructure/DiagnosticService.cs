@@ -101,11 +101,19 @@ public sealed class DiagnosticService : IDiagnosticService
                 var valid = addresses.Length > 0 && !addresses.Any(address => IPAddress.IsLoopback(address) || address.Equals(IPAddress.Any) || address.Equals(IPAddress.IPv6Any));
                 return (valid, addresses.Length == 0 ? "Ответ DNS пуст." : string.Join(", ", addresses.Select(address => address.ToString())) + (valid ? "" : "; найден локальный или нулевой адрес."));
             });
-        await CheckAsync("Hosts", "Проверьте указанные переопределения. Изменение hosts выполняется отдельным явным действием.", async ct =>
+        await CheckAsync("Hosts", "Проверьте файл hosts. Если YouTube/Discord направлены на локальный или нулевой адрес, исправьте эти строки. Добавление адресов zapret не удаляет ваши записи.", async ct =>
         {
             var hosts = await system.ReadHostsAsync(ct);
             var overrides = FindHostsOverrides(hosts);
-            return (overrides.Count == 0, overrides.Count == 0 ? "Активных переопределений YouTube/Discord не найдено." : "Переопределения: " + string.Join("; ", overrides.Take(50)));
+            var blocking = overrides.Where(entry =>
+            {
+                var address = IPAddress.Parse(entry.Split(' ')[0]);
+                return IPAddress.IsLoopback(address) || address.Equals(IPAddress.Any) || address.Equals(IPAddress.IPv6Any);
+            }).ToArray();
+            if (blocking.Length > 0) return (false, "Записи блокируют доступ: " + string.Join("; ", blocking.Take(12)));
+            return (true, overrides.Count == 0 ? "Альтернативных адресов YouTube/Discord не найдено." :
+                "Заданы альтернативные адреса YouTube/Discord: " + string.Join("; ", overrides.Take(12)) +
+                ". Наличие этих записей само по себе не является ошибкой. Доступность проверяется кнопкой «Проверить соединение» на главной странице.");
         });
         await CheckAsync("Прокси Windows (WinINET)", "Проверьте настройки прокси Windows и сценарий автоматической настройки.", async ct =>
         {
@@ -195,7 +203,7 @@ public sealed class DiagnosticService : IDiagnosticService
                     result.Add(tokens[0] + " " + token);
             }
         }
-        return result;
+        return result.Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
     }
 
     private static string RedactProxy(string? value)

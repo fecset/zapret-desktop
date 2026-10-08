@@ -179,9 +179,10 @@ internal sealed class TestApplication : IDisposable
     public TestStrategyTester Tester { get; } = new();
     public TestProcessManager Process { get; }
     public MainViewModel ViewModel { get; }
+    public string HostsPath => Path.Combine(workspace, "hosts");
 
     public TestApplication(IDiagnosticService? diagnostics = null, IConnectionHealthService? connection = null,
-        bool featureServices = false, IPayloadRecoveryService? payloadRecovery = null)
+        bool featureServices = false, IPayloadRecoveryService? payloadRecovery = null, HttpClient? updateClient = null)
     {
         Distribution = new(Path.Combine(workspace, "zapret"));
         Directory.CreateDirectory(Distribution.ListsDirectory);
@@ -195,9 +196,11 @@ internal sealed class TestApplication : IDisposable
         Process = new(Service, Distribution);
         ViewModel = new(Distribution, Strategies, Process, Service, new FilterService(Distribution),
             diagnostics!, new ListService(Distribution), null!, Tester, Settings, new TestStartupService(),
-            new FakePayloadService(Distribution), new TestPrivilegeService(), NullLogger<MainViewModel>.Instance,
+            new FakePayloadService(Distribution, Path.Combine(workspace, "data")), new TestPrivilegeService(), NullLogger<MainViewModel>.Instance,
             backups: featureServices ? new UserDataBackupService(Distribution, Settings, Path.Combine(workspace, "data")) : null,
-            payloadRecovery: payloadRecovery,
+            payloadRecovery: payloadRecovery ?? (featureServices ? new PayloadRecoveryService(Distribution, Path.Combine(workspace, "data")) : null),
+            managedUpdates: updateClient is null ? null : new ManagedUpdateService(Distribution, updateClient,
+                Path.Combine(workspace, "application"), Path.Combine(workspace, "stage"), HostsPath),
             connection: connection,
             history: featureServices ? new StrategyHistoryService(Distribution, Path.Combine(workspace, "data")) : null);
         var initialFile = Path.Combine(Distribution.Root, "general.bat");

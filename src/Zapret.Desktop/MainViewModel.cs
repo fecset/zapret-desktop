@@ -210,11 +210,17 @@ public sealed partial class MainViewModel(IZapretDistribution distribution, IStr
     });
     public Task DiagnoseAsync() => RunAsync(async () =>
     {
-        Diagnostics.Clear();
-        foreach (var item in await diagnostics.RunAsync()) Diagnostics.Add(item);
+        await RefreshDiagnosticsCoreAsync();
         Log("INFO", $"Диагностика: {Diagnostics.Count} проверок");
         Message = "Диагностика завершена";
     });
+    private async Task RefreshDiagnosticsCoreAsync()
+    {
+        var results = await diagnostics.RunAsync();
+        Diagnostics.Clear();
+        foreach (var item in results) Diagnostics.Add(item);
+        OnPropertyChanged(nameof(Diagnostics));
+    }
     public Task SaveSettingsAsync() => RunAsync(async () =>
     {
         await BackupBeforeChangeAsync("Перед сохранением настроек");
@@ -367,6 +373,7 @@ public sealed partial class MainViewModel(IZapretDistribution distribution, IStr
     {
         await BackupBeforeChangeAsync("Перед заменой " + target);
         await fakes.ReplaceAsync(target, source);
+        await LoadPayloadStatesAsync();
         Message = "Активный fake payload заменён. Перезапустите стратегию.";
         Log("INFO", $"Заменён {target} из {source}");
     });
@@ -400,7 +407,8 @@ public sealed partial class MainViewModel(IZapretDistribution distribution, IStr
     public void ClearLogs() { Logs.Clear(); FilteredLogs.Clear(); }
     public string BuildDiagnosticReport() =>
         "Zapret Desktop " + DesktopVersion + " | upstream " + UpstreamVersion + Environment.NewLine +
-        string.Join(Environment.NewLine, Diagnostics.Select(x => $"{(x.Passed ? "OK" : "FAIL")} {x.Name}: {x.Detail} — {x.Solution}"));
+        string.Join(Environment.NewLine, Diagnostics.Select(x => $"{(x.Passed ? "OK" : "FAIL")} {x.Name}: {x.Detail}" +
+            (x.Passed || string.IsNullOrWhiteSpace(x.Solution) ? "" : " — " + x.Solution)));
     public async Task SaveLogsAsync(Stream stream, CancellationToken cancellationToken = default)
     {
         var snapshot = Logs.ToArray();
