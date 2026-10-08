@@ -5,6 +5,34 @@ namespace Zapret.Desktop.Tests;
 
 public sealed class FeatureTests
 {
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task ReplacingDistributionFilesFirstUnloadsTheIdleDriver(bool rollback)
+    {
+        using var app = new TestApplication();
+        app.Process.DriverState = "Running";
+        app.Process.StopError = new InvalidOperationException("WinDivert cannot unload");
+        if (rollback) await app.ViewModel.RollbackDistributionUpdateAsync();
+        else await app.ViewModel.ApplyDistributionUpdateAsync();
+        Assert.Equal(1, app.Process.StopCalls);
+        Assert.Contains("WinDivert cannot unload", app.ViewModel.Message);
+    }
+
+    [Fact]
+    public async Task FailedDriverUnloadRefreshesEngineStatusAndOffersAnError()
+    {
+        using var app = new TestApplication();
+        app.Process.NormalState = ZapretRunState.Running;
+        app.Process.DriverState = "Running";
+        await app.ViewModel.InitializeAsync();
+        app.Process.StopError = new InvalidOperationException("WinDivert cannot unload");
+        await app.ViewModel.StopAsync();
+        Assert.Equal(ZapretRunState.Stopped, app.ViewModel.Status?.State);
+        Assert.Equal("Running", app.ViewModel.Status?.DriverStatus);
+        Assert.Contains("WinDivert cannot unload", app.ViewModel.Message);
+    }
+
     [Fact]
     public async Task DiagnosticReportOffersRemediationOnlyForFailedChecks()
     {

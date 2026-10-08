@@ -271,18 +271,28 @@ internal sealed class TestServiceManager : IServiceManager
 internal sealed class TestProcessManager(TestServiceManager service, IZapretDistribution distribution) : IZapretProcessManager
 {
     public ZapretRunState NormalState { get; set; }
+    public string DriverState { get; set; } = "Stopped";
+    public Exception? StopError { get; set; }
+    public int StopCalls { get; private set; }
     public string? IpSetAtStart { get; private set; }
     public event Action<string, string>? OutputReceived { add { } remove { } }
     public Task<ZapretStatus> GetStatusAsync(CancellationToken cancellationToken = default) => Task.FromResult(new ZapretStatus(
         NormalState != ZapretRunState.Stopped ? NormalState : service.State == "Running" ? ZapretRunState.ServiceRunning : ZapretRunState.Stopped,
-        null, null, service.RunningStrategy?.Id, "Stopped", service.State));
+        null, null, service.RunningStrategy?.Id, DriverState, service.State));
     public async Task<ZapretStatus> StartAsync(ZapretStrategy strategy, CancellationToken cancellationToken = default)
     {
         NormalState = ZapretRunState.Running;
         IpSetAtStart = await File.ReadAllTextAsync(Path.Combine(distribution.ListsDirectory, "ipset-all.txt"), cancellationToken);
         return await GetStatusAsync(cancellationToken);
     }
-    public async Task<ZapretStatus> StopAsync(CancellationToken cancellationToken = default) { await StopOwnedAsync(cancellationToken); return await GetStatusAsync(cancellationToken); }
+    public async Task<ZapretStatus> StopAsync(CancellationToken cancellationToken = default)
+    {
+        StopCalls++;
+        await StopOwnedAsync(cancellationToken);
+        if (StopError is not null) throw StopError;
+        DriverState = "NotInstalled";
+        return await GetStatusAsync(cancellationToken);
+    }
     public Task<bool> StopOwnedAsync(CancellationToken cancellationToken = default)
     {
         var stopped = NormalState == ZapretRunState.Running;

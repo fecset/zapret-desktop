@@ -14,15 +14,18 @@ public sealed class ScServiceManager : IServiceManager
     private readonly IZapretDistribution distribution;
     private readonly IPrivilegeService privilege;
     private readonly IZapretServiceSystem system;
+    private readonly WinDivertDriver driver;
 
     public ScServiceManager(IZapretDistribution distribution, IPrivilegeService privilege)
-        : this(distribution, privilege, new WindowsZapretServiceSystem()) { }
+        : this(distribution, privilege, new WindowsZapretServiceSystem(), new WinDivertDriver()) { }
 
-    internal ScServiceManager(IZapretDistribution distribution, IPrivilegeService privilege, IZapretServiceSystem system)
+    internal ScServiceManager(IZapretDistribution distribution, IPrivilegeService privilege, IZapretServiceSystem system,
+        WinDivertDriver driver)
     {
         this.distribution = distribution;
         this.privilege = privilege;
         this.system = system;
+        this.driver = driver;
     }
 
     public Task<string> GetStatusAsync(CancellationToken cancellationToken = default) => system.GetStatusAsync(cancellationToken);
@@ -91,8 +94,8 @@ public sealed class ScServiceManager : IServiceManager
     public async Task RemoveAsync(CancellationToken cancellationToken = default)
     {
         RequireAdmin();
-        if (await GetStatusAsync(cancellationToken) == "NotInstalled") return;
         await StopAsync(cancellationToken);
+        if (await GetStatusAsync(cancellationToken) == "NotInstalled") return;
         await EnsureSuccessAsync(["delete", Name], cancellationToken);
     }
     public async Task StartAsync(CancellationToken cancellationToken = default)
@@ -110,13 +113,15 @@ public sealed class ScServiceManager : IServiceManager
     public async Task StopAsync(CancellationToken cancellationToken = default)
     {
         RequireAdmin();
-        if (await GetStatusAsync(cancellationToken) is "Stopped" or "NotInstalled") return;
-        var (code, output) = await system.RunAsync(["stop", Name], cancellationToken);
-        var stopped = code is 0 or 1062
-            ? await WaitForStatusAsync("Stopped", cancellationToken)
-            : await GetStatusAsync(cancellationToken) == "Stopped";
-        if (stopped) return;
-        throw new InvalidOperationException($"Не удалось остановить службу zapret (код {code}): {output}");
+        if (await GetStatusAsync(cancellationToken) is not ("Stopped" or "NotInstalled"))
+        {
+            var (code, output) = await system.RunAsync(["stop", Name], cancellationToken);
+            var stopped = code is 0 or 1062
+                ? await WaitForStatusAsync("Stopped", cancellationToken)
+                : await GetStatusAsync(cancellationToken) == "Stopped";
+            if (!stopped) throw new InvalidOperationException($"Не удалось остановить службу zapret (код {code}): {output}");
+        }
+        await driver.UnloadAsync(cancellationToken);
     }
     public async Task RestartAsync(CancellationToken cancellationToken = default)
     {
@@ -169,7 +174,7 @@ public sealed class ScServiceManager : IServiceManager
         var (code, output) = await system.RunAsync(args, cancellationToken);
         if (code != 0) throw new InvalidOperationException($"sc.exe failed ({code}): {output}");
     }
-    private static async Task<(int, string)> RunScAsync(string[] args, CancellationToken cancellationToken)
+    internal static async Task<(int, string)> RunScAsync(string[] args, CancellationToken cancellationToken)
     {
         Encoding.RegisterProvider(CodePagesEncodingProvider.Instance);
         var info = new ProcessStartInfo(Path.Combine(Environment.SystemDirectory, "sc.exe"))

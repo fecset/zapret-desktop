@@ -6,6 +6,35 @@ namespace Zapret.Core.Tests;
 public sealed class ServiceManagerTests
 {
     [Fact]
+    public async Task StoppingServiceAlsoUnloadsItsNetworkDriver()
+    {
+        using var fixture = new Fixture();
+        await fixture.Manager.StopAsync();
+        Assert.Equal("Stopped", fixture.System.State);
+        Assert.Equal(new[] { "stop WinDivert", "delete WinDivert" }, fixture.Drivers.Commands);
+    }
+
+    [Fact]
+    public async Task FailedServiceStopDoesNotUnloadTheDriver()
+    {
+        using var fixture = new Fixture();
+        fixture.System.StopCode = 5;
+        await Assert.ThrowsAsync<InvalidOperationException>(() => fixture.Manager.StopAsync());
+        Assert.Equal("Running", fixture.System.State);
+        Assert.Empty(fixture.Drivers.Commands);
+    }
+
+    [Fact]
+    public async Task RepeatedStopCanCleanUpADriverLeftByAnAlreadyStoppedService()
+    {
+        using var fixture = new Fixture();
+        fixture.System.State = "Stopped";
+        await fixture.Manager.StopAsync();
+        await fixture.Manager.StopAsync();
+        Assert.Equal(new[] { "stop WinDivert", "delete WinDivert" }, fixture.Drivers.Commands);
+    }
+
+    [Fact]
     public async Task UpdatedArgumentsAndStrategyAreUsedOnTheNextServiceStart()
     {
         using var fixture = new Fixture();
@@ -70,13 +99,16 @@ public sealed class ServiceManagerTests
     {
         private readonly string root = Path.Combine(Path.GetTempPath(), "ZapretService-tests-" + Guid.NewGuid().ToString("N"));
         public ServiceSystem System { get; } = new();
+        public DriverTestSystem Drivers { get; } = new();
         public ScServiceManager Manager { get; }
         public ZapretStrategy Strategy { get; }
         public Fixture()
         {
             Directory.CreateDirectory(Path.Combine(root, "bin"));
             File.WriteAllText(Path.Combine(root, "bin", "winws.exe"), "unused fixture");
-            Manager = new(new ZapretDistribution(root), new Privilege(), System);
+            Drivers.ServiceStatus = () => System.State;
+            Drivers.BeforeCommand = _ => Assert.Equal("Stopped", System.State);
+            Manager = new(new ZapretDistribution(root), new Privilege(), System, Drivers.Driver);
             Strategy = new("general (alt)", "general (ALT)", "General (ALT)", "general (ALT).bat",
                 ["--wf-tcp=80,4000", "--filter-udp=6000"], "", false, false, false);
         }
@@ -91,9 +123,11 @@ public sealed class ServiceManagerTests
 
     private sealed class ServiceSystem : IZapretServiceSystem
     {
+        public List<string[]> Commands { get; } = [];
         public string State { get; set; } = "Running";
         public bool HasConflictingWinwsProcesses { get; set; }
         public bool ConfigError { get; set; }
+        public int StopCode { get; set; }
         public string StrategyName { get; private set; } = "general";
         public string? ConfiguredImagePath { get; private set; }
         public string? RunningImagePath { get; private set; }
@@ -102,6 +136,8 @@ public sealed class ServiceManagerTests
         public void SetStrategyName(string strategyName) => StrategyName = strategyName;
         public Task<(int Code, string Output)> RunAsync(string[] args, CancellationToken cancellationToken)
         {
+            Commands.Add(args);
+            if (args[0] == "stop" && StopCode != 0) return Task.FromResult((StopCode, "Access denied"));
             var binPath = Array.IndexOf(args, "binPath=");
             if (args[0] == "config" && ConfigError) return Task.FromResult((5, "Access denied"));
             if (binPath >= 0) ConfiguredImagePath = args[binPath + 1];
