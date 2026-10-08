@@ -23,6 +23,7 @@ jobs:
     timeout-minutes: 30
     outputs:
       tag: ${{ steps.version.outputs.tag }}
+      sha256: ${{ steps.package.outputs.sha256 }}
     steps:
       - name: Validate release tag
         id: version
@@ -46,17 +47,19 @@ jobs:
       - name: Test
         run: dotnet test ZapretDesktop.slnx --configuration Release --no-build
       - name: Build and verify release ZIP
+        id: package
         shell: pwsh
         env:
           RELEASE_TAG: ${{ steps.version.outputs.tag }}
-        run: ./scripts/Build-Release.ps1 -Version $env:RELEASE_TAG -SkipTests
+        run: |
+          ./scripts/Build-Release.ps1 -Version $env:RELEASE_TAG -SkipTests
+          $zip = Get-Item -LiteralPath "dist/ZapretDesktop-$env:RELEASE_TAG-win-x64.zip"
+          "sha256=$((Get-FileHash -LiteralPath $zip.FullName -Algorithm SHA256).Hash.ToLowerInvariant())" >> $env:GITHUB_OUTPUT
       - name: Upload verified package
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: verified-windows-release
-          path: |
-            dist/*.zip
-            dist/*.zip.sha256
+          path: dist/*.zip
           if-no-files-found: error
           retention-days: 7
 
@@ -82,7 +85,8 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
           RELEASE_TAG: ${{ needs.verify-and-package.outputs.tag }}
+          PACKAGE_SHA256: ${{ needs.verify-and-package.outputs.sha256 }}
         run: |
           set -euo pipefail
-          sha256sum --check --strict ./*.sha256
-          gh release create "$RELEASE_TAG" ./*.zip ./*.zip.sha256 --verify-tag --title "Zapret Desktop $RELEASE_TAG" --notes-file "../docs/releases/$RELEASE_TAG.md"
+          printf '%s  %s\n' "$PACKAGE_SHA256" "ZapretDesktop-$RELEASE_TAG-win-x64.zip" | sha256sum --check --strict
+          gh release create "$RELEASE_TAG" ./*.zip --verify-tag --title "Zapret Desktop $RELEASE_TAG" --notes-file "../docs/releases/$RELEASE_TAG.md"
