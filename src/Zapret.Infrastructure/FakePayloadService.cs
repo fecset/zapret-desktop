@@ -2,19 +2,26 @@ using Zapret.Core;
 
 namespace Zapret.Infrastructure;
 
-public sealed class FakePayloadService(IZapretDistribution distribution) : IFakePayloadService
+public sealed class FakePayloadService(IZapretDistribution distribution, string? dataDirectory = null) : IFakePayloadService
 {
-    private static readonly string[] Targets = ["ACTIVE_DISCORD_UDP.bin", "ACTIVE_GAME_UDP.bin"];
-    public IReadOnlyList<string> GetAvailablePayloads() => Directory.EnumerateFiles(distribution.BinDirectory, "*.bin")
+    private readonly DataProtectionPaths paths = new(distribution, dataDirectory);
+    public IReadOnlyList<string> GetAvailablePayloads() => !Directory.Exists(distribution.BinDirectory) ? [] : Directory.EnumerateFiles(distribution.BinDirectory, "*.bin")
         .Select(Path.GetFileName).OfType<string>()
         .Where(x => !x.StartsWith("ACTIVE_", StringComparison.OrdinalIgnoreCase))
         .OrderBy(x => x, StringComparer.OrdinalIgnoreCase).ToArray();
     public async Task ReplaceAsync(string targetName, string sourceName, CancellationToken cancellationToken = default)
     {
-        if (!Targets.Contains(targetName, StringComparer.OrdinalIgnoreCase)) throw new ArgumentException("Unknown active payload.");
+        targetName = DataProtectionPaths.Target(targetName);
         if (!GetAvailablePayloads().Contains(sourceName, StringComparer.OrdinalIgnoreCase)) throw new ArgumentException("Unknown source payload.");
-        var source = SafePaths.RequireDirectFile(distribution.Root, Path.Combine(distribution.BinDirectory, sourceName));
-        var target = SafePaths.RequireDirectFile(distribution.Root, Path.Combine(distribution.BinDirectory, targetName));
-        await AtomicFiles.WriteBytesAsync(target, await File.ReadAllBytesAsync(source, cancellationToken), cancellationToken);
+        await paths.Gate.WaitAsync(cancellationToken);
+        try
+        {
+            var source = SafePaths.RequireDirectFile(distribution.Root, Path.Combine(distribution.BinDirectory, sourceName));
+            var target = SafePaths.RequireDirectFile(distribution.Root, Path.Combine(distribution.BinDirectory, targetName));
+            var bytes = await File.ReadAllBytesAsync(source, cancellationToken);
+            await PayloadRecoveryService.PreserveOriginalAsync(paths, targetName, cancellationToken);
+            await AtomicFiles.WriteBytesAsync(target, bytes, cancellationToken);
+        }
+        finally { paths.Gate.Release(); }
     }
 }

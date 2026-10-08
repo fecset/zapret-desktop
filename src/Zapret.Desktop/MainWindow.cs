@@ -3,6 +3,7 @@ using System.Collections;
 using System.Diagnostics;
 using Avalonia;
 using Avalonia.Controls;
+using Avalonia.Controls.ApplicationLifetimes;
 using Avalonia.Controls.Templates;
 using Avalonia.Input.Platform;
 using Avalonia.Layout;
@@ -36,6 +37,7 @@ public sealed partial class MainWindow : Window
     private ProgressBar? strategyProgressBar;
     private Button? strategyStartButton;
     private Button? strategyCancelButton;
+    private Button? strategyRecommendationButton;
     private Border sidebarStatusDot = new();
     private ScrollViewer contentScroll = new();
     private ContentControl contentHost = new();
@@ -44,6 +46,8 @@ public sealed partial class MainWindow : Window
     private bool exitAllowed;
     private bool exitInProgress;
     private bool openedOnce;
+    private string payloadTargetSelection = "ACTIVE_DISCORD_UDP.bin";
+    private string? payloadSourceSelection;
 
     private bool IsLight => vm.Settings.Theme == "Light" ||
         vm.Settings.Theme == "System" && Application.Current?.ActualThemeVariant == ThemeVariant.Light;
@@ -116,10 +120,16 @@ public sealed partial class MainWindow : Window
                 return;
             }
             exitAllowed = true;
-            if (Application.Current?.ApplicationLifetime is Avalonia.Controls.ApplicationLifetimes.IClassicDesktopStyleApplicationLifetime desktop)
-                desktop.Shutdown();
+            CompleteExit();
         }
         finally { exitInProgress = false; }
+    }
+
+    private void CompleteExit()
+    {
+        exitAllowed = true;
+        if (Application.Current?.ApplicationLifetime is IClassicDesktopStyleApplicationLifetime desktop)
+            desktop.Shutdown();
     }
 
     private void OnViewModelChanged(object? sender, PropertyChangedEventArgs e) =>
@@ -143,6 +153,8 @@ public sealed partial class MainWindow : Window
                 or nameof(MainViewModel.BestTestStrategy) or nameof(MainViewModel.TestingStrategies)
                 or nameof(MainViewModel.Busy) && currentPage == "Стратегии")
                 RefreshStrategyResults();
+            else if (e.PropertyName == nameof(MainViewModel.ConnectionHealth) && currentPage == "Главная")
+                Show(currentPage);
             else if (e.PropertyName == nameof(MainViewModel.Status) && currentPage is "Главная" or "Стратегии")
                 Show(currentPage);
         });

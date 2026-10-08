@@ -68,6 +68,7 @@ public interface IServiceManager
     Task<string> GetStatusAsync(CancellationToken cancellationToken = default);
     Task<bool> GetAutoStartAsync(CancellationToken cancellationToken = default);
     Task InstallAsync(ZapretStrategy strategy, CancellationToken cancellationToken = default);
+    Task UpdateStrategyAsync(ZapretStrategy strategy, CancellationToken cancellationToken = default);
     Task RemoveAsync(CancellationToken cancellationToken = default);
     Task StartAsync(CancellationToken cancellationToken = default);
     Task StopAsync(CancellationToken cancellationToken = default);
@@ -99,6 +100,7 @@ public sealed record StrategyCheckProgress(string FileName, StrategyCheckState S
     int HttpOk = 0, int HttpFailed = 0, int Unsupported = 0, int PingOk = 0, int PingFailed = 0);
 public interface IStrategyTester
 {
+    Task RecoverInterruptedTestAsync(CancellationToken cancellationToken = default);
     Task<StrategyTestResult> RunAsync(IProgress<string> progress, IProgress<StrategyCheckProgress> strategyProgress,
         CancellationToken cancellationToken = default);
 }

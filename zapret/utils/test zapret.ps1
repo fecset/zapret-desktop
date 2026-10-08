@@ -34,19 +34,31 @@ function Set-IpsetMode {
     param([string]$mode)
     $listFile = Join-Path $listsDir "ipset-all.txt"
     $backupFile = Join-Path $listsDir "ipset-all.test-backup.txt"
+    $flagFile = Join-Path $rootDir "ipset_switched.flag"
     if ($mode -eq "any") {
+        if (Test-Path -LiteralPath $flagFile) { throw "Restore the previous IPSet backup before starting another test." }
         # Always backup current file (even if none)
-        if (Test-Path $listFile) {
-            Copy-Item $listFile $backupFile -Force
+        if (Test-Path -LiteralPath $listFile) {
+            Copy-Item -LiteralPath $listFile -Destination $backupFile -Force -ErrorAction Stop
         } else {
             # If none, create empty backup
-            "" | Out-File $backupFile -Encoding UTF8
+            [IO.File]::WriteAllText($backupFile, '')
         }
-        # Make file empty
-        "" | Out-File $listFile -Encoding UTF8
+        # Mark the completed backup before changing IPSet so interruption is always recoverable.
+        [IO.File]::WriteAllText($flagFile, '')
+        "" | Out-File -LiteralPath $listFile -Encoding UTF8 -ErrorAction Stop
     } elseif ($mode -eq "restore") {
-        if (Test-Path $backupFile) {
-            Move-Item $backupFile $listFile -Force
+        # An unmarked backup may be stale or incomplete; the current list is already safe.
+        if (-not (Test-Path -LiteralPath $flagFile)) { return }
+        if (Test-Path -LiteralPath $backupFile) {
+            # Keep the backup until restoration and marker removal both succeed.
+            Copy-Item -LiteralPath $backupFile -Destination $listFile -Force -ErrorAction Stop
+            if (Test-Path -LiteralPath $flagFile) {
+                Remove-Item -LiteralPath $flagFile -Force -ErrorAction Stop
+            }
+            Remove-Item -LiteralPath $backupFile -Force -ErrorAction Stop
+        } else {
+            throw "Unable to restore IPSet: the test backup is missing."
         }
     }
 }
@@ -72,7 +84,6 @@ trap {
     if ($originalIpsetStatus -and $originalIpsetStatus -ne "any") {
         Set-IpsetMode -mode "restore"
     }
-    Remove-Item -Path $ipsetFlagFile -ErrorAction SilentlyContinue
     Wait-AnyKey
     break
 }
@@ -376,7 +387,6 @@ $ipsetFlagFile = Join-Path $rootDir "ipset_switched.flag"
 if (Test-Path $ipsetFlagFile) {
     Write-Host "[INFO] Detected leftover ipset switch flag. Restoring ipset..." -ForegroundColor Yellow
     Set-IpsetMode -mode "restore"
-    Remove-Item -Path $ipsetFlagFile -ErrorAction SilentlyContinue
 }
 
 # Get original ipset status early
@@ -666,8 +676,6 @@ try {
     if (($originalIpsetStatus -ne "any") -and ($testType -eq 'dpi')) {
         Write-Host "[WARNING] Ipset is in '$originalIpsetStatus' mode. Switching to 'any' for accurate DPI tests..." -ForegroundColor Yellow
         Set-IpsetMode -mode "any"
-        # Create flag file to indicate ipset was switched
-        "" | Out-File -FilePath $ipsetFlagFile -Encoding UTF8
     }
     Write-Host "[WARNING] Tests may take several minutes to complete. Please wait..." -ForegroundColor Yellow
 
@@ -1035,7 +1043,6 @@ try {
     if ($originalIpsetStatus -and $originalIpsetStatus -ne "any") {
         Set-IpsetMode -mode "restore"
     }
-    Remove-Item -Path $ipsetFlagFile -ErrorAction SilentlyContinue
 } finally {
     Stop-Zapret
     Restore-WinwsSnapshot -snapshot $originalWinws
@@ -1043,7 +1050,6 @@ try {
         Write-Host "[INFO] Restoring original ipset mode..." -ForegroundColor DarkGray
         Set-IpsetMode -mode "restore"
     }
-    Remove-Item -Path $ipsetFlagFile -ErrorAction SilentlyContinue
 }
 
     Wait-AnyKey

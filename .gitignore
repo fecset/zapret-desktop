@@ -4,6 +4,8 @@ src/**/bin/
 src/**/obj/
 tests/**/bin/
 tests/**/obj/
+TestResults/
+tests/**/TestResults/
 *.user
 *.suo
 *.tmp

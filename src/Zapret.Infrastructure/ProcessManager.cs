@@ -1,7 +1,6 @@
 using System.Diagnostics;
 using System.Security.Principal;
 using Zapret.Core;
-using Microsoft.Win32;
 
 namespace Zapret.Infrastructure;
 
@@ -16,12 +15,32 @@ public sealed class WindowsPrivilegeService : IPrivilegeService
     }
 }
 
-public sealed class ZapretProcessManager(IZapretDistribution distribution, IServiceManager service) : IZapretProcessManager
+public sealed class ZapretProcessManager : IZapretProcessManager
 {
+    private readonly IZapretDistribution distribution;
+    private readonly IServiceManager service;
+    private readonly Func<Process, CancellationToken, Task> terminateProcess;
     private readonly SemaphoreSlim gate = new(1, 1);
     private Process? owned;
     private string? strategyId;
     public event Action<string, string>? OutputReceived;
+
+    public ZapretProcessManager(IZapretDistribution distribution, IServiceManager service)
+        : this(distribution, service, TerminateProcessAsync) { }
+
+    internal ZapretProcessManager(IZapretDistribution distribution, IServiceManager service,
+        Func<Process, CancellationToken, Task> terminateProcess)
+    {
+        this.distribution = distribution;
+        this.service = service;
+        this.terminateProcess = terminateProcess;
+    }
+
+    private static async Task TerminateProcessAsync(Process process, CancellationToken cancellationToken)
+    {
+        if (!process.HasExited) process.Kill();
+        await process.WaitForExitAsync(cancellationToken);
+    }
 
     public async Task<ZapretStatus> GetStatusAsync(CancellationToken cancellationToken = default)
     {
@@ -39,8 +58,9 @@ public sealed class ZapretProcessManager(IZapretDistribution distribution, IServ
             string? runningStrategy = live is not null ? strategyId : null;
             if (serviceStatus == "Running")
             {
-                using var key = Registry.LocalMachine.OpenSubKey(@"SYSTEM\CurrentControlSet\Services\zapret");
-                runningStrategy = (key?.GetValue("zapret-discord-youtube") as string)?.ToLowerInvariant();
+                // Registry metadata describes the next service start, not the live process.
+                // A failed restart can leave the old process running with different arguments.
+                runningStrategy = null;
             }
             DateTimeOffset? started = null;
             try { if (process is not null) started = process.StartTime; }
@@ -120,16 +140,14 @@ public sealed class ZapretProcessManager(IZapretDistribution distribution, IServ
         }
         try
         {
-            if (!live.HasExited) live.Kill();
-            await live.WaitForExitAsync(cancellationToken);
+            await terminateProcess(live, cancellationToken);
         }
-        catch (InvalidOperationException) { } // The process exited between the status check and Kill.
-        finally
-        {
-            live.Dispose();
-            owned = null;
-            strategyId = null;
-        }
+        catch (InvalidOperationException) when (live.HasExited) { }
+        // Keep ownership after a failed Kill or cancelled wait so another stop can retry.
+        if (!live.HasExited) throw new InvalidOperationException("Не удалось дождаться завершения winws.exe.");
+        live.Dispose();
+        owned = null;
+        strategyId = null;
         return true;
     }
     public async Task<ZapretStatus> RestartAsync(ZapretStrategy strategy, CancellationToken cancellationToken = default)

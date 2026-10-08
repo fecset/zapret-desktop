@@ -6,5 +6,6 @@
   </Folder>
   <Folder Name="/tests/">
     <Project Path="tests/Zapret.Core.Tests/Zapret.Core.Tests.csproj" />
+    <Project Path="tests/Zapret.Desktop.Tests/Zapret.Desktop.Tests.csproj" />
   </Folder>
 </Solution>

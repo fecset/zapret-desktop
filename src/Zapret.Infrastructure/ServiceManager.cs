@@ -8,20 +8,33 @@ using Zapret.Core;
 
 namespace Zapret.Infrastructure;
 
-public sealed class ScServiceManager(IZapretDistribution distribution, IPrivilegeService privilege) : IServiceManager
+public sealed class ScServiceManager : IServiceManager
 {
     private const string Name = "zapret";
-    public Task<string> GetStatusAsync(CancellationToken cancellationToken = default) => QueryStatusAsync(Name, cancellationToken);
-    public Task<bool> GetAutoStartAsync(CancellationToken cancellationToken = default)
+    private readonly IZapretDistribution distribution;
+    private readonly IPrivilegeService privilege;
+    private readonly IZapretServiceSystem system;
+
+    public ScServiceManager(IZapretDistribution distribution, IPrivilegeService privilege)
+        : this(distribution, privilege, new WindowsZapretServiceSystem()) { }
+
+    internal ScServiceManager(IZapretDistribution distribution, IPrivilegeService privilege, IZapretServiceSystem system)
     {
-        cancellationToken.ThrowIfCancellationRequested();
-        using var key = Registry.LocalMachine.OpenSubKey(@"SYSTEM\CurrentControlSet\Services\zapret");
-        return Task.FromResult(key?.GetValue("Start") is int start && start == 2);
+        this.distribution = distribution;
+        this.privilege = privilege;
+        this.system = system;
     }
+
+    public Task<string> GetStatusAsync(CancellationToken cancellationToken = default) => system.GetStatusAsync(cancellationToken);
+    public Task<bool> GetAutoStartAsync(CancellationToken cancellationToken = default) => system.GetAutoStartAsync(cancellationToken);
 
     public static Task<string> QueryStatusAsync(string serviceName, CancellationToken cancellationToken = default)
     {
         cancellationToken.ThrowIfCancellationRequested();
+        return Task.FromResult(QueryServiceState(serviceName).State);
+    }
+    private static (string State, uint ProcessId) QueryServiceState(string serviceName)
+    {
         var manager = OpenSCManager(null, null, 0x0001); // SC_MANAGER_CONNECT
         if (manager == IntPtr.Zero) throw new Win32Exception(Marshal.GetLastWin32Error(), "Не удалось открыть диспетчер служб Windows.");
         try
@@ -30,19 +43,21 @@ public sealed class ScServiceManager(IZapretDistribution distribution, IPrivileg
             if (handle == IntPtr.Zero)
             {
                 var error = Marshal.GetLastWin32Error();
-                if (error == 1060) return Task.FromResult("NotInstalled");
-                if (error == 5) return Task.FromResult("AccessDenied");
+                if (error == 1060) return ("NotInstalled", 0);
+                if (error == 5) return ("AccessDenied", 0);
                 throw new Win32Exception(error, $"Не удалось получить состояние службы {serviceName}.");
             }
             try
             {
-                if (!QueryServiceStatus(handle, out var status))
+                if (!QueryServiceStatusEx(handle, 0, out var status, (uint)Marshal.SizeOf<ServiceStatus>(), out _))
                     throw new Win32Exception(Marshal.GetLastWin32Error(), $"Не удалось получить состояние службы {serviceName}.");
-                return Task.FromResult(status.CurrentState switch
+                var state = status.CurrentState switch
                 {
                     1 => "Stopped", 2 => "StartPending", 3 => "StopPending", 4 => "Running",
                     _ => "Unknown"
-                });
+                };
+                // Windows only guarantees this PID for running, paused and pause/continue pending services.
+                return (state, status.CurrentState is 4 or 5 or 6 or 7 ? status.ProcessId : 0);
             }
             finally { CloseServiceHandle(handle); }
         }
@@ -52,13 +67,26 @@ public sealed class ScServiceManager(IZapretDistribution distribution, IPrivileg
     {
         RequireAdmin();
         if (await GetStatusAsync(cancellationToken) != "NotInstalled") throw new InvalidOperationException("zapret service is already installed.");
-        var exe = SafePaths.RequireDirectFile(distribution.Root, Path.Combine(distribution.BinDirectory, "winws.exe"));
-        var commandLine = Quote(exe) + " " + string.Join(" ", strategy.Arguments.Select(Quote));
+        RequireNoConflictingWinws();
+        var commandLine = BuildCommandLine(strategy);
         await EnsureSuccessAsync(["create", Name, "binPath=", commandLine, "DisplayName=", "zapret", "start=", "auto"], cancellationToken);
         await EnsureSuccessAsync(["description", Name, "Zapret DPI bypass software"], cancellationToken);
-        using var key = Registry.LocalMachine.OpenSubKey(@"SYSTEM\CurrentControlSet\Services\zapret", writable: true);
-        key?.SetValue("zapret-discord-youtube", strategy.Name, RegistryValueKind.String);
+        system.SetStrategyName(strategy.Name);
         await StartAsync(cancellationToken);
+    }
+    public async Task UpdateStrategyAsync(ZapretStrategy strategy, CancellationToken cancellationToken = default)
+    {
+        RequireAdmin();
+        if (await GetStatusAsync(cancellationToken) == "NotInstalled")
+            throw new InvalidOperationException("Служба zapret не установлена.");
+        RequireNoConflictingWinws();
+        await EnsureSuccessAsync(["config", Name, "binPath=", BuildCommandLine(strategy)], cancellationToken);
+        system.SetStrategyName(strategy.Name);
+    }
+    private string BuildCommandLine(ZapretStrategy strategy)
+    {
+        var exe = SafePaths.RequireDirectFile(distribution.Root, Path.Combine(distribution.BinDirectory, "winws.exe"));
+        return Quote(exe) + " " + string.Join(" ", strategy.Arguments.Select(Quote));
     }
     public async Task RemoveAsync(CancellationToken cancellationToken = default)
     {
@@ -70,8 +98,9 @@ public sealed class ScServiceManager(IZapretDistribution distribution, IPrivileg
     public async Task StartAsync(CancellationToken cancellationToken = default)
     {
         RequireAdmin();
+        RequireNoConflictingWinws();
         if (await GetStatusAsync(cancellationToken) == "Running") return;
-        var (code, output) = await RunScAsync(["start", Name], cancellationToken);
+        var (code, output) = await system.RunAsync(["start", Name], cancellationToken);
         var running = code is 0 or 1056
             ? await WaitForStatusAsync("Running", cancellationToken)
             : await GetStatusAsync(cancellationToken) == "Running";
@@ -82,7 +111,7 @@ public sealed class ScServiceManager(IZapretDistribution distribution, IPrivileg
     {
         RequireAdmin();
         if (await GetStatusAsync(cancellationToken) is "Stopped" or "NotInstalled") return;
-        var (code, output) = await RunScAsync(["stop", Name], cancellationToken);
+        var (code, output) = await system.RunAsync(["stop", Name], cancellationToken);
         var stopped = code is 0 or 1062
             ? await WaitForStatusAsync("Stopped", cancellationToken)
             : await GetStatusAsync(cancellationToken) == "Stopped";
@@ -91,6 +120,8 @@ public sealed class ScServiceManager(IZapretDistribution distribution, IPrivileg
     }
     public async Task RestartAsync(CancellationToken cancellationToken = default)
     {
+        RequireAdmin();
+        RequireNoConflictingWinws();
         await StopAsync(cancellationToken);
         for (var i = 0; i < 30 && await GetStatusAsync(cancellationToken) != "Stopped"; i++)
             await Task.Delay(200, cancellationToken);
@@ -104,6 +135,11 @@ public sealed class ScServiceManager(IZapretDistribution distribution, IPrivileg
     private void RequireAdmin()
     {
         if (!privilege.IsAdministrator) throw new UnauthorizedAccessException("Administrator rights are required for Windows services.");
+    }
+    private void RequireNoConflictingWinws()
+    {
+        if (system.HasConflictingWinwsProcesses)
+            throw new InvalidOperationException("winws.exe уже запущен. Остановите его перед запуском службы zapret.");
     }
     private async Task<bool> WaitForStatusAsync(string expected, CancellationToken cancellationToken)
     {
@@ -128,9 +164,9 @@ public sealed class ScServiceManager(IZapretDistribution distribution, IPrivileg
         result.Append('\\', slashes * 2).Append('"');
         return result.ToString();
     }
-    private static async Task EnsureSuccessAsync(string[] args, CancellationToken cancellationToken)
+    private async Task EnsureSuccessAsync(string[] args, CancellationToken cancellationToken)
     {
-        var (code, output) = await RunScAsync(args, cancellationToken);
+        var (code, output) = await system.RunAsync(args, cancellationToken);
         if (code != 0) throw new InvalidOperationException($"sc.exe failed ({code}): {output}");
     }
     private static async Task<(int, string)> RunScAsync(string[] args, CancellationToken cancellationToken)
@@ -150,6 +186,34 @@ public sealed class ScServiceManager(IZapretDistribution distribution, IPrivileg
         return (process.ExitCode, await stdout + await stderr);
     }
 
+    private sealed class WindowsZapretServiceSystem : IZapretServiceSystem
+    {
+        public Task<string> GetStatusAsync(CancellationToken cancellationToken) => QueryStatusAsync(Name, cancellationToken);
+        public Task<bool> GetAutoStartAsync(CancellationToken cancellationToken)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            using var key = Registry.LocalMachine.OpenSubKey(@"SYSTEM\CurrentControlSet\Services\zapret");
+            return Task.FromResult(key?.GetValue("Start") is int start && start == 2);
+        }
+        public Task<(int Code, string Output)> RunAsync(string[] args, CancellationToken cancellationToken) => RunScAsync(args, cancellationToken);
+        public void SetStrategyName(string strategyName)
+        {
+            using var key = Registry.LocalMachine.OpenSubKey(@"SYSTEM\CurrentControlSet\Services\zapret", writable: true)
+                ?? throw new InvalidOperationException("Не удалось открыть настройки службы zapret.");
+            key.SetValue("zapret-discord-youtube", strategyName, RegistryValueKind.String);
+        }
+        public bool HasConflictingWinwsProcesses
+        {
+            get
+            {
+                var serviceProcessId = QueryServiceState(Name).ProcessId;
+                var processes = Process.GetProcessesByName("winws");
+                try { return processes.Any(process => (uint)process.Id != serviceProcessId); }
+                finally { foreach (var process in processes) process.Dispose(); }
+            }
+        }
+    }
+
     [StructLayout(LayoutKind.Sequential)]
     private struct ServiceStatus
     {
@@ -160,6 +224,8 @@ public sealed class ScServiceManager(IZapretDistribution distribution, IPrivileg
         public uint ServiceSpecificExitCode;
         public uint CheckPoint;
         public uint WaitHint;
+        public uint ProcessId;
+        public uint ServiceFlags;
     }
 
     [DllImport("advapi32.dll", EntryPoint = "OpenSCManagerW", SetLastError = true, CharSet = CharSet.Unicode)]
@@ -170,9 +236,19 @@ public sealed class ScServiceManager(IZapretDistribution distribution, IPrivileg
 
     [DllImport("advapi32.dll", SetLastError = true)]
     [return: MarshalAs(UnmanagedType.Bool)]
-    private static extern bool QueryServiceStatus(IntPtr service, out ServiceStatus status);
+    private static extern bool QueryServiceStatusEx(IntPtr service, uint infoLevel, out ServiceStatus status,
+        uint bufferSize, out uint bytesNeeded);
 
     [DllImport("advapi32.dll", SetLastError = true)]
     [return: MarshalAs(UnmanagedType.Bool)]
     private static extern bool CloseServiceHandle(IntPtr handle);
+}
+
+internal interface IZapretServiceSystem
+{
+    Task<string> GetStatusAsync(CancellationToken cancellationToken);
+    Task<bool> GetAutoStartAsync(CancellationToken cancellationToken);
+    Task<(int Code, string Output)> RunAsync(string[] args, CancellationToken cancellationToken);
+    void SetStrategyName(string strategyName);
+    bool HasConflictingWinwsProcesses { get; }
 }

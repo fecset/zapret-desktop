@@ -11,6 +11,11 @@ public sealed class BatStrategyProvider(IZapretDistribution distribution) : IStr
     public async Task<IReadOnlyList<ZapretStrategy>> GetStrategiesAsync(CancellationToken cancellationToken = default)
     {
         errors.Clear();
+        if (!Directory.Exists(distribution.Root))
+        {
+            errors.Add("Каталог дистрибутива zapret не найден: " + distribution.Root);
+            return [];
+        }
         var files = Directory.EnumerateFiles(distribution.Root, "general*.bat", SearchOption.TopDirectoryOnly)
             .OrderBy(x => NaturalKey(Path.GetFileName(x)), StringComparer.OrdinalIgnoreCase).ToArray();
         var strategies = new List<ZapretStrategy>(files.Length);
@@ -74,17 +79,20 @@ public static class BatStrategyParser
         var exeEnd = raw.IndexOf("winws.exe\"", StringComparison.OrdinalIgnoreCase);
         if (exeEnd < 0) throw new FormatException("Unsupported winws invocation.");
         raw = raw[(exeEnd + "winws.exe\"".Length)..];
+        raw = raw.Replace("^!", "!");
+        var knownVariables = new[] { "%BIN%", "%LISTS%", "%GameFilterTCP%", "%GameFilterUDP%" };
+        var syntax = raw;
+        foreach (var variable in knownVariables) syntax = syntax.Replace(variable, "", StringComparison.OrdinalIgnoreCase);
+        if (syntax.IndexOfAny(['%', '^', '&', '|', '>', '<']) >= 0)
+            throw new FormatException("Unsupported batch expansion or shell operator in strategy.");
+        // Parse the BAT template before inserting paths; inserted characters are argument data.
         var bin = Path.Combine(root, "bin") + Path.DirectorySeparatorChar;
         var lists = Path.Combine(root, "lists") + Path.DirectorySeparatorChar;
-        raw = raw.Replace("%BIN%", bin, StringComparison.OrdinalIgnoreCase)
+        var tokens = Tokenize(raw).Select(token => token.Replace("%BIN%", bin, StringComparison.OrdinalIgnoreCase)
             .Replace("%LISTS%", lists, StringComparison.OrdinalIgnoreCase)
             .Replace("%GameFilterTCP%", game.Mode is GameFilterMode.All or GameFilterMode.Tcp ? game.TcpPorts : "12", StringComparison.OrdinalIgnoreCase)
-            .Replace("%GameFilterUDP%", game.Mode is GameFilterMode.All or GameFilterMode.Udp ? game.UdpPorts : "12", StringComparison.OrdinalIgnoreCase)
-            .Replace("^!", "!");
-        if (raw.Contains('%') || raw.Contains('^') || raw.Contains('&') || raw.Contains('|') || raw.Contains('>') || raw.Contains('<'))
-            throw new FormatException("Unsupported batch expansion or shell operator in strategy.");
-        var tokens = Tokenize(raw);
-        if (tokens.Count == 0 || tokens.Any(x => !x.StartsWith("--", StringComparison.Ordinal)))
+            .Replace("%GameFilterUDP%", game.Mode is GameFilterMode.All or GameFilterMode.Udp ? game.UdpPorts : "12", StringComparison.OrdinalIgnoreCase)).ToArray();
+        if (tokens.Length == 0 || tokens.Any(x => !x.StartsWith("--", StringComparison.Ordinal)))
             throw new FormatException("Unsupported winws argument form.");
         foreach (var arg in tokens)
         {
