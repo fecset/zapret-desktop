@@ -148,10 +148,14 @@ public sealed partial class MainWindow
         }));
         tools.Children.Add(Button("Сохранить", async () =>
         {
-            var file = await StorageProvider.SaveFilePickerAsync(new FilePickerSaveOptions { SuggestedFileName = "zapret-desktop.log" });
-            if (file is null) return;
-            await using var stream = await file.OpenWriteAsync();
-            await vm.SaveLogsAsync(stream);
+            try
+            {
+                var file = await StorageProvider.SaveFilePickerAsync(new FilePickerSaveOptions { SuggestedFileName = "zapret-desktop.log" });
+                if (file is null) return;
+                await using var stream = await file.OpenWriteAsync();
+                await vm.SaveLogsAsync(stream);
+            }
+            catch (Exception ex) { vm.ReportError("Не удалось сохранить журнал", ex); }
         }));
         tools.Children.Add(Button("Очистить", () => { vm.ClearLogs(); return Task.CompletedTask; }, danger: true));
         page.Children.Add(tools);
@@ -167,6 +171,8 @@ public sealed partial class MainWindow
         FilterSettings();
         AppSettings();
         UpdateSettings();
+        ManagedUpdateSettings();
+        BackupSettings();
         FakeSettings();
         CreditsSettings();
     }
@@ -175,6 +181,10 @@ public sealed partial class MainWindow
         var stack = new StackPanel { Spacing = 12 };
         stack.Children.Add(Text("Служба Windows", 17, FontWeight.SemiBold));
         stack.Children.Add(Text($"Сейчас: {ServiceLabel(vm.Status?.ServiceStatus)}. Служба позволяет запускать Zapret вместе с Windows.", 12, color: MutedBrush));
+        stack.Children.Add(Text("Запуск и перезапуск службы применяют выбранную стратегию и текущие настройки Game Filter.", 12, color: MutedBrush));
+        var processConflict = vm.Status?.State is ZapretRunState.Running or ZapretRunState.External;
+        if (processConflict)
+            stack.Children.Add(Text("Перед запуском службы остановите работающий winws. Внешний экземпляр остановите там, где он был запущен.", 12, color: WarnBrush));
         var actions = new WrapPanel { Orientation = Orientation.Horizontal };
         var serviceState = vm.Status?.ServiceStatus;
         var available = serviceState == "NotInstalled"
@@ -232,6 +242,7 @@ public sealed partial class MainWindow
         ipRow.Children.Add(ipset);
         ipRow.Children.Add(Button("Применить", () => vm.SetIpSetAsync((IpSetMode)(ipset.SelectedItem ?? IpSetMode.None)), primary: true));
         stack.Children.Add(ipRow);
+        stack.Children.Add(Button("Применить и перезапустить Zapret", vm.ApplyAndRestartAsync));
         page.Children.Add(Panel(stack));
     }
     private void AppSettings()
@@ -280,12 +291,15 @@ public sealed partial class MainWindow
         var stack = new StackPanel { Spacing = 10 };
         stack.Children.Add(Text("Активные fake payloads", 17, FontWeight.SemiBold));
         stack.Children.Add(Text("Выберите файл из комплекта zapret. Изменение начнёт действовать после перезапуска стратегии.", 12, color: MutedBrush));
-        var source = Dropdown(vm.FakePayloads, vm.FakePayloads.FirstOrDefault(), 280);
+        var source = Dropdown(vm.FakePayloads, vm.FakePayloads.Contains(payloadSourceSelection ?? "")
+            ? payloadSourceSelection : vm.FakePayloads.FirstOrDefault(), 280);
+        source.SelectionChanged += (_, _) => payloadSourceSelection = source.SelectedItem as string;
         stack.Children.Add(source);
         var buttons = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 8 };
         buttons.Children.Add(Button("Применить для Discord", () => vm.ReplaceFakeAsync("ACTIVE_DISCORD_UDP.bin", source.SelectedItem as string ?? "")));
         buttons.Children.Add(Button("Применить для игр", () => vm.ReplaceFakeAsync("ACTIVE_GAME_UDP.bin", source.SelectedItem as string ?? "")));
         stack.Children.Add(buttons);
+        PayloadRecoveryControls(stack, source);
         page.Children.Add(Panel(stack));
     }
     private void CreditsSettings()

@@ -7,9 +7,14 @@ namespace Zapret.Infrastructure;
 public sealed class PowerShellStrategyTester(IZapretDistribution distribution, IServiceManager service,
     IZapretProcessManager process, IPrivilegeService privilege, IStrategyProvider strategies) : IStrategyTester
 {
+    private Process? activeRunner;
+
     public async Task<StrategyTestResult> RunAsync(IProgress<string> progress,
         IProgress<StrategyCheckProgress> strategyProgress, CancellationToken cancellationToken = default)
     {
+        if (activeRunner is not null)
+            throw new InvalidOperationException("Предыдущий тест стратегий ещё не завершён. Дождитесь его остановки.");
+        await RecoverInterruptedTestAsync(cancellationToken);
         if (!privilege.IsAdministrator) throw new UnauthorizedAccessException("Для автоподбора нужны права администратора.");
         if (await service.GetStatusAsync(cancellationToken) != "NotInstalled")
             throw new InvalidOperationException("Перед автоподбором удалите службу zapret на странице настроек.");
@@ -25,7 +30,8 @@ public sealed class PowerShellStrategyTester(IZapretDistribution distribution, I
         };
         foreach (var arg in new[] { "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", script, "-DesktopMode" })
             info.ArgumentList.Add(arg);
-        using var runner = Process.Start(info) ?? throw new InvalidOperationException("Не удалось запустить PowerShell для теста стратегий.");
+        var runner = Process.Start(info) ?? throw new InvalidOperationException("Не удалось запустить PowerShell для теста стратегий.");
+        activeRunner = runner;
         async Task ReplyAsync(string value)
         {
             await runner.StandardInput.WriteLineAsync(value);
@@ -35,10 +41,6 @@ public sealed class PowerShellStrategyTester(IZapretDistribution distribution, I
         string? results = null;
         string? currentFile = null;
         var completed = new CompletedStrategyTracker();
-        using var registration = cancellationToken.Register(() =>
-        {
-            try { if (!runner.HasExited) runner.Kill(entireProcessTree: true); } catch (InvalidOperationException) { }
-        });
         try
         {
             while (await runner.StandardOutput.ReadLineAsync(cancellationToken) is { } line)
@@ -100,19 +102,29 @@ public sealed class PowerShellStrategyTester(IZapretDistribution distribution, I
         }
         finally
         {
-            try { await process.StopOwnedAsync(); }
-            finally { await RestoreIpSetIfInterruptedAsync(); }
+            await RecoverInterruptedTestAsync();
         }
     }
-    private async Task RestoreIpSetIfInterruptedAsync()
+    public async Task RecoverInterruptedTestAsync(CancellationToken cancellationToken = default)
     {
+        if (activeRunner is { } runner)
+        {
+            if (!runner.HasExited) runner.Kill(entireProcessTree: true);
+            await runner.WaitForExitAsync(cancellationToken);
+            await process.StopOwnedAsync(cancellationToken);
+            runner.Dispose();
+            activeRunner = null;
+        }
         var flag = Path.Combine(distribution.Root, "ipset_switched.flag");
         if (!File.Exists(flag)) return;
         var backup = Path.Combine(distribution.ListsDirectory, "ipset-all.test-backup.txt");
         var target = Path.Combine(distribution.ListsDirectory, "ipset-all.txt");
-        if (File.Exists(backup))
-            await AtomicFiles.WriteTextAsync(target, await File.ReadAllTextAsync(backup));
+        if (!File.Exists(backup))
+            throw new IOException("Не удалось восстановить IPSet после теста: резервная копия отсутствует. Восстановите ipset-all.txt перед запуском Zapret.");
+        SafePaths.RequireDirectFile(distribution.Root, backup);
+        await AtomicFiles.WriteBytesAsync(target, await File.ReadAllBytesAsync(backup, cancellationToken), cancellationToken);
         File.Delete(flag);
+        File.Delete(backup);
     }
 }
 

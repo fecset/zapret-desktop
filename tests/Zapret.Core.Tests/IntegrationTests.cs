@@ -59,6 +59,7 @@ public class IntegrationTests
         public Task<string> GetStatusAsync(CancellationToken cancellationToken = default) => Task.FromResult("Running");
         public Task<bool> GetAutoStartAsync(CancellationToken cancellationToken = default) => Task.FromResult(true);
         public Task InstallAsync(ZapretStrategy strategy, CancellationToken cancellationToken = default) => Task.CompletedTask;
+        public Task UpdateStrategyAsync(ZapretStrategy strategy, CancellationToken cancellationToken = default) => Task.CompletedTask;
         public Task RemoveAsync(CancellationToken cancellationToken = default) => Task.CompletedTask;
         public Task StartAsync(CancellationToken cancellationToken = default) => Task.CompletedTask;
         public Task StopAsync(CancellationToken cancellationToken = default) { StopCalled = true; return Task.CompletedTask; }

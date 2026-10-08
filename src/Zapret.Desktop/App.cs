@@ -38,8 +38,18 @@ public sealed class App : Application
             services.AddSingleton<IListService, ListService>();
             services.AddSingleton<IStartupService, WindowsStartupService>();
             services.AddSingleton<IFakePayloadService, FakePayloadService>();
-            services.AddSingleton(new HttpClient { Timeout = TimeSpan.FromSeconds(10) });
+            services.AddSingleton<IUserDataBackupService>(provider => new UserDataBackupService(
+                provider.GetRequiredService<IZapretDistribution>(), provider.GetRequiredService<ISettingsStore>()));
+            services.AddSingleton<IPayloadRecoveryService>(provider => new PayloadRecoveryService(
+                provider.GetRequiredService<IZapretDistribution>()));
+            services.AddSingleton<IConnectionHealthService>(_ => new ConnectionHealthService());
+            services.AddSingleton<IStrategyHistoryService>(provider => new StrategyHistoryService(
+                provider.GetRequiredService<IZapretDistribution>()));
+            services.AddSingleton(new HttpClient(new HttpClientHandler { AllowAutoRedirect = false })
+                { Timeout = TimeSpan.FromMinutes(5) });
             services.AddSingleton<IUpdateService, GitHubUpdateService>();
+            services.AddSingleton<IManagedUpdateService>(provider => new ManagedUpdateService(
+                provider.GetRequiredService<IZapretDistribution>(), provider.GetRequiredService<HttpClient>()));
             services.AddSingleton<IStrategyTester, PowerShellStrategyTester>();
             services.AddSingleton<ISettingsStore>(new JsonSettingsStore(Path.Combine(
                 Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "ZapretDesktop", "settings.json")));

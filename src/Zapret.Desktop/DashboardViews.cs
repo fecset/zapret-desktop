@@ -11,6 +11,8 @@ public sealed partial class MainWindow
     private void BuildHome()
     {
         Heading("Главная", "Ваше подключение и всё важное — на одном экране.");
+        foreach (var warning in vm.StartupWarnings)
+            page.Children.Add(Panel(Text(warning, 12, color: WarnBrush), 12));
         updateNotice = Text("", 13, FontWeight.SemiBold, WarnBrush);
         updateNoticePanel = Panel(updateNotice, 14);
         page.Children.Add(updateNoticePanel);
@@ -40,6 +42,10 @@ public sealed partial class MainWindow
         Grid.SetColumn(mainAction, 1);
         hero.Children.Add(mainAction);
         page.Children.Add(Panel(hero, 24));
+        if (running) page.Children.Add(Text(state == ZapretRunState.ServiceRunning
+            ? "Активные параметры службы: фактическая команда показана в диагностике"
+            : "Фактически запущена: " + vm.RunningStrategyName, 13, color: MutedBrush));
+        ConnectionPanel();
 
         var metrics = new Grid { ColumnDefinitions = new ColumnDefinitions("*,*,*") };
         AddMetric(metrics, 0, "ДВИЖОК", state == ZapretRunState.Stopped ? "Остановлен" : "Работает",
@@ -69,15 +75,17 @@ public sealed partial class MainWindow
         Grid.SetColumn(picker, 1);
         strategy.Children.Add(picker);
         page.Children.Add(Panel(strategy));
+        page.Children.Add(Button("Применить выбор и перезапустить", vm.ApplyAndRestartAsync));
 
         var section = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 10, Margin = new Thickness(0, 9, 0, 0) };
         section.Children.Add(Text("Быстрые действия", 17, FontWeight.SemiBold));
         page.Children.Add(section);
         var quick = new Grid { ColumnDefinitions = new ColumnDefinitions("*,*") };
-        var diag = QuickAction(FluentIcons.ShieldCheckmark, "Проверить систему", "Файлы, драйвер и служба", () =>
+        var diag = QuickAction(FluentIcons.ShieldCheckmark, "Проверить систему", "Файлы, драйвер и служба", async () =>
         {
             Show("Диагностика");
-            return vm.DiagnoseAsync();
+            await vm.DiagnoseAsync();
+            if (currentPage == "Диагностика") Show("Диагностика");
         });
         diag.Margin = new Thickness(0, 0, 8, 0);
         quick.Children.Add(diag);
@@ -157,6 +165,9 @@ public sealed partial class MainWindow
         strategySummaryText = Text("", 13, FontWeight.SemiBold);
         strategySummaryPanel = Panel(strategySummaryText, 14);
         page.Children.Add(strategySummaryPanel);
+        strategyRecommendationButton = Button("Применить рекомендацию", () => vm.ApplyRecommendationAsync());
+        page.Children.Add(strategyRecommendationButton);
+        StrategyHistoryPanel();
         var strategyCards = new StackPanel { Spacing = 12 };
         foreach (var item in vm.Strategies)
         {
@@ -203,11 +214,13 @@ public sealed partial class MainWindow
     {
         if (strategyStartButton is not null) strategyStartButton.IsEnabled = !vm.Busy && vm.Strategies.Count > 0;
         if (strategyCancelButton is not null) strategyCancelButton.IsEnabled = vm.TestingStrategies;
+        if (strategyRecommendationButton is not null)
+            strategyRecommendationButton.IsEnabled = vm.BestTestStrategy is not null && !vm.Busy;
         if (strategySummaryPanel is not null) strategySummaryPanel.IsVisible = vm.StrategyTestSummary is not null;
         if (strategySummaryText is not null)
         {
             strategySummaryText.Text = (vm.StrategyTestSummary ?? "") +
-                (vm.BestTestStrategy is null ? "" : " Выберите её вручную, чтобы сохранить выбор.");
+                (vm.BestTestStrategy is null ? "" : " Нажмите «Применить рекомендацию», чтобы сохранить выбор.");
             strategySummaryText.Foreground = vm.BestTestStrategy is null ? MutedBrush : GoodBrush;
         }
         if (strategyProgressPanel is not null) strategyProgressPanel.IsVisible = vm.StrategyTestSummary is not null;
