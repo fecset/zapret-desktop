@@ -57,12 +57,17 @@ public sealed partial class MainWindow
                 "Running" => "Загружен", "Stopped" => "Остановлен",
                 "NotInstalled" => "Не загружен", _ => "Не удалось проверить"
             }, driverStatus == "Running" && state == ZapretRunState.Stopped
-                ? "Zapret выключен; драйвер может оставаться в памяти" : "WinDivert",
+                ? "Повторите выгрузку перед обновлением файлов" : "WinDivert",
             driverStatus == "Running" && state != ZapretRunState.Stopped ? GoodBrush :
                 driverStatus is "Unknown" or "AccessDenied" ? WarnBrush : MutedBrush);
         AddMetric(metrics, 2, "СЛУЖБА WINDOWS", ServiceLabel(vm.Status?.ServiceStatus),
             "Автозапуск системы", vm.Status?.ServiceStatus == "Running" ? GoodBrush : MutedBrush);
         page.Children.Add(metrics);
+        if (state == ZapretRunState.Stopped && driverStatus is "Running" or "StartPending" or "StopPending")
+        {
+            page.Children.Add(Text("WinDivert ещё загружен. Нажмите «Выгрузить WinDivert», чтобы освободить файлы для обновления.", 13, color: WarnBrush));
+            page.Children.Add(Button("Выгрузить WinDivert", vm.StopAsync));
+        }
 
         var strategy = new Grid { ColumnDefinitions = new ColumnDefinitions("*,Auto"), RowDefinitions = new RowDefinitions("Auto,Auto") };
         var strategyText = new StackPanel { Spacing = 5 };

@@ -20,20 +20,25 @@ public sealed class ZapretProcessManager : IZapretProcessManager
     private readonly IZapretDistribution distribution;
     private readonly IServiceManager service;
     private readonly Func<Process, CancellationToken, Task> terminateProcess;
+    private readonly WinDivertDriver driver;
+    private readonly Func<Process[]> findWinws;
     private readonly SemaphoreSlim gate = new(1, 1);
     private Process? owned;
     private string? strategyId;
+    private bool driverCleanupPending;
     public event Action<string, string>? OutputReceived;
 
     public ZapretProcessManager(IZapretDistribution distribution, IServiceManager service)
-        : this(distribution, service, TerminateProcessAsync) { }
+        : this(distribution, service, TerminateProcessAsync, new WinDivertDriver(), () => Process.GetProcessesByName("winws")) { }
 
     internal ZapretProcessManager(IZapretDistribution distribution, IServiceManager service,
-        Func<Process, CancellationToken, Task> terminateProcess)
+        Func<Process, CancellationToken, Task> terminateProcess, WinDivertDriver driver, Func<Process[]> findWinws)
     {
         this.distribution = distribution;
         this.service = service;
         this.terminateProcess = terminateProcess;
+        this.driver = driver;
+        this.findWinws = findWinws;
     }
 
     private static async Task TerminateProcessAsync(Process process, CancellationToken cancellationToken)
@@ -46,11 +51,8 @@ public sealed class ZapretProcessManager : IZapretProcessManager
     {
         cancellationToken.ThrowIfCancellationRequested();
         var serviceStatus = await service.GetStatusAsync(cancellationToken);
-        var winDivert = await ScServiceManager.QueryStatusAsync("WinDivert", cancellationToken);
-        var winDivert14 = await ScServiceManager.QueryStatusAsync("WinDivert14", cancellationToken);
-        var driverStatus = winDivert == "Running" || winDivert14 == "Running" ? "Running" :
-            winDivert != "NotInstalled" ? winDivert : winDivert14;
-        var processes = Process.GetProcessesByName("winws");
+        var driverStatus = await driver.GetStatusAsync(cancellationToken);
+        var processes = findWinws();
         try
         {
             var live = LiveOwnedProcess();
@@ -112,13 +114,15 @@ public sealed class ZapretProcessManager : IZapretProcessManager
         await gate.WaitAsync(cancellationToken);
         try
         {
-            if (!await StopOwnedCoreAsync(cancellationToken))
-            {
-                var state = (await GetStatusAsync(cancellationToken)).State;
-                if (state == ZapretRunState.ServiceRunning) await service.StopAsync(cancellationToken);
-                else if (state == ZapretRunState.External)
-                    throw new InvalidOperationException("winws.exe запущен другим приложением. Остановите его там, где он был запущен.");
-            }
+            driverCleanupPending |= owned is not null;
+            await StopOwnedCoreAsync(cancellationToken);
+            if (await service.GetStatusAsync(cancellationToken) is not ("Stopped" or "NotInstalled"))
+                await service.StopAsync(cancellationToken);
+            if ((await GetStatusAsync(cancellationToken)).State == ZapretRunState.External)
+                throw new InvalidOperationException("winws.exe запущен другим приложением. Остановите его там, где он был запущен.");
+            if (!await driver.UnloadAsync(cancellationToken))
+                throw new InvalidOperationException("WinDivert ещё используется работающим Zapret. Повторите остановку после завершения winws и службы.");
+            driverCleanupPending = false;
             return await GetStatusAsync(cancellationToken);
         }
         finally { gate.Release(); }
@@ -126,7 +130,16 @@ public sealed class ZapretProcessManager : IZapretProcessManager
     public async Task<bool> StopOwnedAsync(CancellationToken cancellationToken = default)
     {
         await gate.WaitAsync(cancellationToken);
-        try { return await StopOwnedCoreAsync(cancellationToken); }
+        try
+        {
+            driverCleanupPending |= owned is not null;
+            var stopped = await StopOwnedCoreAsync(cancellationToken);
+            if (driverCleanupPending)
+            {
+                driverCleanupPending = !await driver.UnloadAsync(cancellationToken);
+            }
+            return stopped;
+        }
         finally { gate.Release(); }
     }
     private async Task<bool> StopOwnedCoreAsync(CancellationToken cancellationToken)

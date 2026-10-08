@@ -144,10 +144,17 @@ public sealed partial class MainViewModel(IZapretDistribution distribution, IStr
     });
     public Task StopAsync() => RunAsync(async () =>
     {
-        Status = await process.StopAsync();
-        ConnectionHealth = null;
-        Log("INFO", "Запрос остановки завершён");
-        Message = "Остановлено";
+        try
+        {
+            await process.StopAsync();
+            Log("INFO", "Zapret остановлен, WinDivert выгружен");
+            Message = "Zapret остановлен, драйвер выгружен. Файлы можно обновлять.";
+        }
+        finally
+        {
+            Status = await process.GetStatusAsync();
+            if (Status.State == ZapretRunState.Stopped) ConnectionHealth = null;
+        }
     });
     public Task SelectAsync(ZapretStrategy? strategy) => RunAsync(async () =>
     {
@@ -191,8 +198,14 @@ public sealed partial class MainViewModel(IZapretDistribution distribution, IStr
                     else await service.StartAsync();
                 }
                 break;
-            case "remove": await service.RemoveAsync(); break;
-            case "stop": await service.StopAsync(); break;
+            case "remove":
+                try { await service.RemoveAsync(); }
+                finally { Status = await process.GetStatusAsync(); }
+                break;
+            case "stop":
+                try { await service.StopAsync(); }
+                finally { Status = await process.GetStatusAsync(); }
+                break;
             case "auto": await service.SetAutoStartAsync(true); break;
             case "manual": await service.SetAutoStartAsync(false); break;
         }

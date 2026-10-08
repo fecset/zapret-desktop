@@ -59,13 +59,14 @@ public sealed partial class MainViewModel
         try { TestHistory.Insert(0, await history.SaveAsync(result, strategyChecks.Values.ToArray())); }
         catch (Exception ex) { Log("WARN", "Не удалось сохранить историю автоподбора: " + ex.Message); }
     }
-    private async Task RequireStoppedForFilesAsync()
+    private async Task RequireStoppedForFilesAsync(bool unloadDriver = false)
     {
         await tester.RecoverInterruptedTestAsync();
         Status = await process.GetStatusAsync();
         var serviceState = await service.GetStatusAsync();
         if (Status.State != ZapretRunState.Stopped || serviceState is not ("Stopped" or "NotInstalled"))
             throw new InvalidOperationException("Остановите Zapret и службу перед изменением файлов или восстановлением данных.");
+        if (unloadDriver) Status = await process.StopAsync();
     }
     public Task RefreshFeatureDataAsync() => RunAsync(LoadFeatureDataAsync);
     public Task CreateBackupAsync() => RunAsync(async () =>
@@ -183,7 +184,7 @@ public sealed partial class MainViewModel
     });
     public Task ApplyDistributionUpdateAsync() => RunAsync(async () =>
     {
-        await RequireStoppedForFilesAsync();
+        await RequireStoppedForFilesAsync(unloadDriver: true);
         await BackupBeforeChangeAsync("Перед обновлением zapret");
         LastDistributionUpdate = await Required(managedUpdates).ApplyDistributionAsync(
             DistributionUpdatePlan ?? throw new InvalidOperationException("Сначала загрузите обновление zapret."));
@@ -193,7 +194,7 @@ public sealed partial class MainViewModel
     });
     public Task RollbackDistributionUpdateAsync() => RunAsync(async () =>
     {
-        await RequireStoppedForFilesAsync();
+        await RequireStoppedForFilesAsync(unloadDriver: true);
         await Required(managedUpdates).RollbackDistributionAsync(
             LastDistributionUpdate ?? throw new InvalidOperationException("Нет обновления для отката."));
         LastDistributionUpdate = null;
@@ -219,6 +220,7 @@ public sealed partial class MainViewModel
             var serviceState = await service.GetStatusAsync();
             if (state.State != ZapretRunState.Stopped || serviceState is not ("Stopped" or "NotInstalled"))
                 throw new InvalidOperationException("Остановите службу и внешний winws перед обновлением Desktop.");
+            Status = await process.StopAsync();
             var scheduled = await Required(managedUpdates).ScheduleDesktopUpdateAsync(DesktopUpdatePlan, Environment.ProcessId);
             Log("INFO", scheduled.Summary + " Журнал: " + scheduled.LogPath);
             return true;

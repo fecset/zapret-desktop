@@ -29,6 +29,26 @@ public sealed class TestAvaloniaApp : Application
 public sealed class UserInterfaceTests
 {
     [AvaloniaFact]
+    public async Task AnIdleLoadedDriverCanBeUnloadedWithoutStartingZapretAgain()
+    {
+        using var app = new TestApplication();
+        app.Process.DriverState = "Running";
+        await app.Settings.SaveAsync(new DesktopSettings { CheckUpdates = false }, TestContext.Current.CancellationToken);
+        var window = new MainWindow(app.ViewModel);
+        window.Show();
+        await WaitForAsync(() => app.ViewModel.Strategies.Count > 0 && !app.ViewModel.Busy);
+        var unload = Assert.Single(window.GetLogicalDescendants().OfType<Button>(),
+            button => button.Content as string == "Выгрузить WinDivert");
+        unload.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+        await WaitForAsync(() => app.Process.StopCalls == 1 && !app.ViewModel.Busy);
+        Dispatcher.UIThread.RunJobs();
+        Assert.Equal("NotInstalled", app.ViewModel.Status?.DriverStatus);
+        Assert.DoesNotContain(window.GetLogicalDescendants().OfType<Button>(),
+            button => button.Content as string == "Выгрузить WinDivert");
+        window.Hide();
+    }
+
+    [AvaloniaFact]
     public async Task FinalProgressIsIncludedInCancelledHistoryAndLateCallbacksAreIgnored()
     {
         using var app = new TestApplication(featureServices: true);
