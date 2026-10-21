@@ -1,8 +1,8 @@
-param([switch]$DesktopMode)
+param([switch]$DesktopMode, [string]$DistributionRoot)
 
 $hasErrors = $false
 
-$rootDir = Split-Path $PSScriptRoot
+$rootDir = if ($DistributionRoot) { $DistributionRoot } else { Split-Path $PSScriptRoot }
 $listsDir = Join-Path $rootDir "lists"
 $utilsDir = Join-Path $rootDir "utils"
 $resultsDir = Join-Path $utilsDir "test results"

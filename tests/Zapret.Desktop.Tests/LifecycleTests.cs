@@ -8,6 +8,23 @@ namespace Zapret.Desktop.Tests;
 public sealed class LifecycleTests
 {
     [Fact]
+    public async Task RepeatedStartsAreNotQueuedWhileAnEngineCommandIsRunning()
+    {
+        using var app = new TestApplication();
+        var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        app.Tester.Recover = async () => { entered.TrySetResult(); await release.Task; };
+        var first = app.ViewModel.StartAsync();
+        await entered.Task.WaitAsync(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
+        var second = app.ViewModel.StartAsync();
+        var duplicateWasIgnored = second.IsCompleted;
+        release.TrySetResult();
+        await Task.WhenAll(first, second);
+        Assert.True(duplicateWasIgnored);
+        Assert.Equal(1, app.Process.StartCalls);
+    }
+
+    [Fact]
     public async Task ExitCancelsTheTestAndWaitsForItsCleanup()
     {
         using var app = new TestApplication();
@@ -273,7 +290,9 @@ internal sealed class TestProcessManager(TestServiceManager service, IZapretDist
     public ZapretRunState NormalState { get; set; }
     public string DriverState { get; set; } = "Stopped";
     public Exception? StopError { get; set; }
+    public Func<Task>? BeforeStop { get; set; }
     public int StopCalls { get; private set; }
+    public int StartCalls { get; private set; }
     public string? IpSetAtStart { get; private set; }
     public event Action<string, string>? OutputReceived { add { } remove { } }
     public Task<ZapretStatus> GetStatusAsync(CancellationToken cancellationToken = default) => Task.FromResult(new ZapretStatus(
@@ -281,6 +300,7 @@ internal sealed class TestProcessManager(TestServiceManager service, IZapretDist
         null, null, service.RunningStrategy?.Id, DriverState, service.State));
     public async Task<ZapretStatus> StartAsync(ZapretStrategy strategy, CancellationToken cancellationToken = default)
     {
+        StartCalls++;
         NormalState = ZapretRunState.Running;
         IpSetAtStart = await File.ReadAllTextAsync(Path.Combine(distribution.ListsDirectory, "ipset-all.txt"), cancellationToken);
         return await GetStatusAsync(cancellationToken);
@@ -288,6 +308,7 @@ internal sealed class TestProcessManager(TestServiceManager service, IZapretDist
     public async Task<ZapretStatus> StopAsync(CancellationToken cancellationToken = default)
     {
         StopCalls++;
+        if (BeforeStop is not null) await BeforeStop();
         await StopOwnedAsync(cancellationToken);
         if (StopError is not null) throw StopError;
         DriverState = "NotInstalled";

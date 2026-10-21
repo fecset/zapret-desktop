@@ -15,7 +15,7 @@ public sealed partial class MainWindow
         var stack = new StackPanel { Spacing = 8 };
         stack.Children.Add(Text("Доступность сервисов", 16, FontWeight.SemiBold));
         stack.Children.Add(Text("Проверка HTTP/TLS отдельно от состояния движка. Она не подтверждает голосовую связь Discord.", 12, color: MutedBrush));
-        stack.Children.Add(Button("Проверить соединение", vm.CheckConnectionAsync));
+        stack.Children.Add(EngineButton("Проверить соединение", vm.CheckConnectionAsync));
         if (vm.ConnectionHealth is { } health)
         {
             stack.Children.Add(Text("Последняя проверка: " + health.CheckedAt.ToLocalTime().ToString("g"), 11, color: MutedBrush));

@@ -29,6 +29,81 @@ public sealed class TestAvaloniaApp : Application
 public sealed class UserInterfaceTests
 {
     [AvaloniaFact]
+    public async Task ChangingStrategyAndStoppingRemainAvailableDuringConnectionChecks()
+    {
+        var health = new SlowHealth();
+        using var app = new TestApplication(connection: health);
+        await app.Settings.SaveAsync(new DesktopSettings { CheckUpdates = false }, TestContext.Current.CancellationToken);
+        var window = new MainWindow(app.ViewModel);
+        window.Show();
+        await WaitForAsync(() => app.ViewModel.Strategies.Count > 0 && !app.ViewModel.Busy);
+        var start = app.ViewModel.StartAsync();
+        await WaitForAsync(() => health.Started);
+        try
+        {
+            var picker = Assert.Single(window.GetLogicalDescendants().OfType<ComboBox>());
+            picker.SelectedItem = app.ViewModel.Strategies.Single(item => item.Id == "general (alt)");
+            await WaitForAsync(() => app.ViewModel.SelectedStrategy?.Id == "general (alt)" && !app.ViewModel.Busy);
+            Dispatcher.UIThread.RunJobs();
+            var stop = Assert.Single(window.GetLogicalDescendants().OfType<Button>(),
+                button => button.Content as string == "Остановить Zapret");
+            Assert.True(stop.IsEnabled);
+            stop.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+            await WaitForAsync(() => app.ViewModel.Status?.State == ZapretRunState.Stopped && !app.ViewModel.Busy);
+            Dispatcher.UIThread.RunJobs();
+            Assert.True(Assert.Single(window.GetLogicalDescendants().OfType<Button>(),
+                button => button.Content as string == "Запустить Zapret").IsEnabled);
+        }
+        finally
+        {
+            health.Completion.TrySetResult(new(DateTimeOffset.UtcNow, []));
+            await start;
+            window.Hide();
+        }
+        Assert.Null(app.ViewModel.ConnectionHealth);
+    }
+
+    private sealed class SlowHealth : IConnectionHealthService
+    {
+        public bool Started { get; private set; }
+        public TaskCompletionSource<ConnectionHealthResult> Completion { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public Task<ConnectionHealthResult> CheckAsync(CancellationToken cancellationToken = default)
+        {
+            Started = true;
+            return Completion.Task;
+        }
+    }
+
+    [AvaloniaFact]
+    public async Task EngineButtonIsDisabledWhileAStartIsInProgress()
+    {
+        using var app = new TestApplication();
+        await app.Settings.SaveAsync(new DesktopSettings { CheckUpdates = false }, TestContext.Current.CancellationToken);
+        var window = new MainWindow(app.ViewModel);
+        window.Show();
+        await WaitForAsync(() => app.ViewModel.Strategies.Count > 0 && !app.ViewModel.Busy);
+        var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        app.Tester.Recover = async () => { entered.TrySetResult(); await release.Task; };
+        var start = app.ViewModel.StartAsync();
+        await entered.Task;
+        Dispatcher.UIThread.RunJobs();
+        try
+        {
+            var button = Assert.Single(window.GetLogicalDescendants().OfType<Button>(),
+                item => item.Content as string == "Запустить Zapret");
+            Assert.False(button.IsEnabled);
+        }
+        finally
+        {
+            release.TrySetResult();
+            await start;
+            Dispatcher.UIThread.RunJobs();
+            window.Hide();
+        }
+    }
+
+    [AvaloniaFact]
     public async Task AnIdleLoadedDriverCanBeUnloadedWithoutStartingZapretAgain()
     {
         using var app = new TestApplication();

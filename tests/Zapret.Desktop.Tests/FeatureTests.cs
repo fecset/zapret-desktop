@@ -5,6 +5,65 @@ namespace Zapret.Desktop.Tests;
 
 public sealed class FeatureTests
 {
+    [Fact]
+    public async Task ManualConnectionCheckCannotPublishResultsDuringAnEngineMutation()
+    {
+        var health = new DelayedHealth();
+        using var app = new TestApplication(connection: health);
+        var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        app.Process.BeforeStop = async () => { entered.TrySetResult(); await release.Task; };
+        var stop = app.ViewModel.StopAsync();
+        await entered.Task.WaitAsync(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
+        var check = app.ViewModel.CheckConnectionAsync();
+        var checkWasSkipped = !health.Entered.Task.IsCompleted;
+        release.TrySetResult();
+        await stop;
+        health.Completion.TrySetResult(new(DateTimeOffset.UtcNow, []));
+        await check;
+        Assert.True(checkWasSkipped);
+        Assert.Null(app.ViewModel.ConnectionHealth);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task SlowConnectionCheckDoesNotBlockStoppingOrChangingStrategy(bool restart)
+    {
+        var health = new DelayedHealth();
+        using var app = new TestApplication(connection: health);
+        await app.ViewModel.InitializeAsync();
+        var start = restart ? app.ViewModel.ApplyAndRestartAsync() : app.ViewModel.StartAsync();
+        await health.Entered.Task.WaitAsync(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
+        try
+        {
+            Assert.False(app.ViewModel.Busy);
+            await app.ViewModel.StopAsync().WaitAsync(TimeSpan.FromSeconds(2), TestContext.Current.CancellationToken);
+            await app.ViewModel.SelectAsync(app.ViewModel.Strategies.Single(item => item.Id == "general (alt)"))
+                .WaitAsync(TimeSpan.FromSeconds(2), TestContext.Current.CancellationToken);
+            Assert.Equal(ZapretRunState.Stopped, app.ViewModel.Status?.State);
+            Assert.Equal("general (alt)", app.ViewModel.SelectedStrategy?.Id);
+        }
+        finally
+        {
+            health.Completion.TrySetResult(new(DateTimeOffset.UtcNow, []));
+            await start;
+        }
+        Assert.Null(app.ViewModel.ConnectionHealth);
+    }
+
+    private sealed class DelayedHealth : IConnectionHealthService
+    {
+        public TaskCompletionSource Entered { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public TaskCompletionSource<ConnectionHealthResult> Completion { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public Task<ConnectionHealthResult> CheckAsync(CancellationToken cancellationToken = default)
+        {
+            Entered.TrySetResult();
+            // Simulate a transport that finishes even after cancellation.
+            return Completion.Task;
+        }
+    }
+
     [Theory]
     [InlineData(false)]
     [InlineData(true)]

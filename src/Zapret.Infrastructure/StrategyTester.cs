@@ -4,10 +4,31 @@ using Zapret.Core;
 
 namespace Zapret.Infrastructure;
 
-public sealed class PowerShellStrategyTester(IZapretDistribution distribution, IServiceManager service,
-    IZapretProcessManager process, IPrivilegeService privilege, IStrategyProvider strategies) : IStrategyTester
+public sealed class PowerShellStrategyTester : IStrategyTester
 {
+    private readonly IZapretDistribution distribution;
+    private readonly IServiceManager service;
+    private readonly IZapretProcessManager process;
+    private readonly IPrivilegeService privilege;
+    private readonly IStrategyProvider strategies;
+    private readonly Func<CancellationToken, Task<string>> scriptSource;
     private Process? activeRunner;
+
+    public PowerShellStrategyTester(IZapretDistribution distribution, IServiceManager service,
+        IZapretProcessManager process, IPrivilegeService privilege, IStrategyProvider strategies)
+        : this(distribution, service, process, privilege, strategies, DesktopStrategyScript.ReadSourceAsync) { }
+
+    internal PowerShellStrategyTester(IZapretDistribution distribution, IServiceManager service,
+        IZapretProcessManager process, IPrivilegeService privilege, IStrategyProvider strategies,
+        Func<CancellationToken, Task<string>> scriptSource)
+    {
+        this.distribution = distribution;
+        this.service = service;
+        this.process = process;
+        this.privilege = privilege;
+        this.strategies = strategies;
+        this.scriptSource = scriptSource;
+    }
 
     public async Task<StrategyTestResult> RunAsync(IProgress<string> progress,
         IProgress<StrategyCheckProgress> strategyProgress, CancellationToken cancellationToken = default)
@@ -22,13 +43,14 @@ public sealed class PowerShellStrategyTester(IZapretDistribution distribution, I
             throw new InvalidOperationException("Перед автоподбором остановите Zapret.");
         var available = (await strategies.GetStrategiesAsync(cancellationToken)).ToDictionary(
             item => Path.GetFileName(item.SourceFile), StringComparer.OrdinalIgnoreCase);
-        var script = SafePaths.RequireDirectFile(distribution.Root, Path.Combine(distribution.Root, "utils", "test zapret.ps1"));
+        using var script = await DesktopStrategyScript.CreateAsync(await scriptSource(cancellationToken), cancellationToken);
         var info = new ProcessStartInfo(Path.Combine(Environment.SystemDirectory, "WindowsPowerShell", "v1.0", "powershell.exe"))
         {
             WorkingDirectory = distribution.Root, UseShellExecute = false, CreateNoWindow = true,
             RedirectStandardInput = true, RedirectStandardOutput = true, RedirectStandardError = true
         };
-        foreach (var arg in new[] { "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", script, "-DesktopMode" })
+        foreach (var arg in new[] { "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", script.Path,
+            "-DesktopMode", "-DistributionRoot", distribution.Root })
             info.ArgumentList.Add(arg);
         var runner = Process.Start(info) ?? throw new InvalidOperationException("Не удалось запустить PowerShell для теста стратегий.");
         activeRunner = runner;

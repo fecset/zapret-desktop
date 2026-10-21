@@ -6,6 +6,28 @@ namespace Zapret.Core.Tests;
 
 public sealed class StrategyTesterTests
 {
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task UpstreamScriptReplacementCannotMakeDesktopWaitForConsoleInput(bool upstreamExists)
+    {
+        using var fixture = new Fixture();
+        File.Delete(Path.Combine(fixture.Root, "general.bat"));
+        if (upstreamExists)
+            await File.WriteAllTextAsync(Path.Combine(fixture.Root, "utils", "test zapret.ps1"),
+                "Write-Host 'UPSTREAM_INTERACTIVE'; [void][Console]::ReadLine()");
+        var distribution = new ZapretDistribution(fixture.Root);
+        var tester = new PowerShellStrategyTester(distribution, new NoService(), new NoProcess(),
+            new Privilege(), new BatStrategyProvider(distribution));
+        var output = new List<string>();
+        using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(8));
+        var error = await Assert.ThrowsAsync<InvalidOperationException>(() => tester.RunAsync(
+            new InlineProgress<string>(output.Add), new InlineProgress<StrategyCheckProgress>(_ => { }), deadline.Token));
+        Assert.Contains("Тестовый скрипт завершился", error.Message);
+        Assert.DoesNotContain("UPSTREAM_INTERACTIVE", output);
+        Assert.Equal(fixture.Original, await File.ReadAllBytesAsync(fixture.IpSet));
+    }
+
     [Fact]
     public async Task RecoveryRestoresTheExactBytesAndRemovesTheInterruptionMarker()
     {
@@ -35,13 +57,14 @@ public sealed class StrategyTesterTests
     {
         using var fixture = new Fixture();
         await File.WriteAllTextAsync(Path.Combine(fixture.Root, "utils", "test zapret.ps1"), """
-            param([switch]$DesktopMode)
-            $testRoot = Split-Path $PSScriptRoot
+            param([switch]$DesktopMode, [string]$DistributionRoot)
+            $testRoot = $DistributionRoot
             $testLists = Join-Path $testRoot 'lists'
             Copy-Item -LiteralPath (Join-Path $testLists 'ipset-all.txt') -Destination (Join-Path $testLists 'ipset-all.test-backup.txt')
             [IO.File]::WriteAllText((Join-Path $testLists 'ipset-all.txt'), '')
             [IO.File]::WriteAllText((Join-Path $testRoot 'ipset_switched.flag'), '')
             [IO.File]::WriteAllText((Join-Path $testRoot 'runner.pid'), [string]$PID)
+            [IO.File]::WriteAllText((Join-Path $testRoot 'runner-path.txt'), $PSCommandPath)
             Write-Host 'WAITING'
             [void][Console]::ReadLine()
             """);
@@ -58,6 +81,8 @@ public sealed class StrategyTesterTests
         Assert.True(result.Cancelled);
         Assert.Equal(fixture.Original, await File.ReadAllBytesAsync(fixture.IpSet));
         Assert.False(File.Exists(fixture.Flag));
+        var runnerPath = await File.ReadAllTextAsync(Path.Combine(fixture.Root, "runner-path.txt"));
+        Assert.False(Directory.Exists(Path.GetDirectoryName(runnerPath)));
         var pid = int.Parse(await File.ReadAllTextAsync(Path.Combine(fixture.Root, "runner.pid")));
         try
         {
@@ -124,7 +149,8 @@ public sealed class StrategyTesterTests
         {
             UseShellExecute = false, CreateNoWindow = true, RedirectStandardOutput = true, RedirectStandardError = true
         };
-        foreach (var arg in new[] { "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", script, "-DesktopMode" }) info.ArgumentList.Add(arg);
+        foreach (var arg in new[] { "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", script, "-DesktopMode",
+            "-DistributionRoot", fixture.Root }) info.ArgumentList.Add(arg);
         using var runner = Process.Start(info)!;
         var output = runner.StandardOutput.ReadToEndAsync();
         var error = runner.StandardError.ReadToEndAsync();
@@ -149,8 +175,7 @@ public sealed class StrategyTesterTests
         Assert.Equal(fixture.Original, await File.ReadAllBytesAsync(fixture.IpSet));
     }
 
-    private static Task<string> ReadBundledScriptAsync() => File.ReadAllTextAsync(Path.GetFullPath(Path.Combine(
-        AppContext.BaseDirectory, "../../../../../zapret/utils/test zapret.ps1")));
+    private static Task<string> ReadBundledScriptAsync() => DesktopStrategyScript.ReadSourceAsync(CancellationToken.None);
 
     private sealed class Fixture : IDisposable
     {
@@ -167,7 +192,8 @@ public sealed class StrategyTesterTests
             File.WriteAllBytes(IpSet, Original);
             File.WriteAllText(Path.Combine(Root, "general.bat"), "start \"test\" /min \"%BIN%winws.exe\" --wf-tcp=80");
             var distribution = new ZapretDistribution(Root);
-            Tester = new(distribution, new NoService(), new NoProcess(), new Privilege(), new BatStrategyProvider(distribution));
+            Tester = new(distribution, new NoService(), new NoProcess(), new Privilege(), new BatStrategyProvider(distribution),
+                token => File.ReadAllTextAsync(Path.Combine(Root, "utils", "test zapret.ps1"), token));
         }
         public async Task InterruptAsync()
         {

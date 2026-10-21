@@ -22,6 +22,7 @@ public sealed partial class MainWindow : Window
     private readonly DispatcherTimer feedbackTimer = new() { Interval = TimeSpan.FromSeconds(8) };
     private readonly StackPanel page = new() { Spacing = 18 };
     private readonly Dictionary<string, Button> navButtons = [];
+    private readonly List<(Button Button, Func<bool> CanExecute)> engineControls = [];
     private TextBlock footer = new();
     private TextBlock sidebarStatus = new();
     private TextBlock? upstreamUpdateStatus;
@@ -142,6 +143,7 @@ public sealed partial class MainWindow : Window
             }
             sidebarStatus.Text = vm.StatusText;
             sidebarStatusDot.Background = CurrentStatusBrush();
+            if (e.PropertyName == nameof(MainViewModel.Busy)) RefreshEngineControls();
             if (e.PropertyName is nameof(MainViewModel.UpstreamUpdate) or nameof(MainViewModel.DesktopUpdate)
                 or nameof(MainViewModel.CheckingUpdates) or nameof(MainViewModel.UpdateError))
                 RefreshUpdateDisplay();
@@ -270,6 +272,7 @@ public sealed partial class MainWindow : Window
         currentPage = name;
         DetachPage();
         page.Children.Clear();
+        engineControls.Clear();
         contentScroll.Content = page;
         contentHost.Content = contentScroll;
         UpdateNavigation();
@@ -380,6 +383,20 @@ public sealed partial class MainWindow : Window
         CornerRadius = new CornerRadius(12), HorizontalAlignment = HorizontalAlignment.Left,
         Child = Text(label, 12, FontWeight.SemiBold, color)
     };
+    private Button EngineButton(string label, Func<Task> action, Func<bool>? canExecute = null,
+        bool primary = false, bool danger = false)
+    {
+        canExecute ??= () => true;
+        var button = Button(label, action, primary, danger);
+        engineControls.Add((button, canExecute));
+        button.IsEnabled = !vm.Busy && canExecute();
+        return button;
+    }
+    private void RefreshEngineControls()
+    {
+        foreach (var (button, canExecute) in engineControls)
+            button.IsEnabled = !vm.Busy && canExecute();
+    }
     private Button Button(string label, Func<Task> action, bool primary = false, bool danger = false)
     {
         var button = new Button

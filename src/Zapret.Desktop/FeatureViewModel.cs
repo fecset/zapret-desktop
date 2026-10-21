@@ -6,6 +6,8 @@ namespace Zapret.Desktop;
 public sealed partial class MainViewModel
 {
     private ConnectionHealthResult? connectionHealth;
+    private CancellationTokenSource? connectionCancellation;
+    private long connectionVersion;
     private ManagedUpdatePlan? distributionUpdatePlan;
     private ManagedUpdatePlan? desktopUpdatePlan;
     private ManagedUpdateResult? lastDistributionUpdate;
@@ -136,16 +138,53 @@ public sealed partial class MainViewModel
         await LoadPayloadStatesAsync();
         Message = "Замена файла отменена. Перезапустите стратегию, чтобы применить изменение.";
     });
-    public Task CheckConnectionAsync() => RunAsync(async () =>
+    public async Task CheckConnectionAsync()
     {
-        await CheckConnectionCoreAsync();
-        Message = "Проверка HTTP/TLS доступности завершена";
-    });
-    private async Task CheckConnectionCoreAsync()
+        if (Busy || exitRequested) return;
+        if (await CheckConnectionCoreAsync()) Message = "Проверка HTTP/TLS доступности завершена";
+    }
+    private void CancelConnectionCheck()
     {
-        if (connection is null) return;
-        try { ConnectionHealth = await connection.CheckAsync(); }
+        connectionVersion++;
+        var previous = connectionCancellation;
+        connectionCancellation = null;
+        previous?.Cancel();
+    }
+    private async Task<bool> CheckConnectionCoreAsync()
+    {
+        CancelConnectionCheck();
+        if (connection is null || exitRequested) return false;
+        using var cancellation = new CancellationTokenSource();
+        connectionCancellation = cancellation;
+        try
+        {
+            var result = await connection.CheckAsync(cancellation.Token)
+                .WaitAsync(TimeSpan.FromSeconds(10), cancellation.Token);
+            if (cancellation.IsCancellationRequested || exitRequested || connectionCancellation != cancellation) return false;
+            ConnectionHealth = result;
+            return true;
+        }
+        catch (OperationCanceledException) when (cancellation.IsCancellationRequested) { }
         catch (Exception ex) { Log("WARN", "Не удалось проверить доступность сервисов: " + ex.Message); }
+        finally
+        {
+            if (connectionCancellation == cancellation) connectionCancellation = null;
+        }
+        return false;
+    }
+    private async Task RunEngineActionAsync(Func<Task> action, bool checkConnection = true)
+    {
+        long? completedVersion = null;
+        await RunAsync(async () =>
+        {
+            CancelConnectionCheck();
+            ConnectionHealth = null;
+            await action();
+            completedVersion = connectionVersion;
+        }, skipIfBusy: true);
+        // Network latency must not hold the gate used by start, stop and strategy selection.
+        if (checkConnection && completedVersion == connectionVersion && !exitRequested)
+            await CheckConnectionCoreAsync();
     }
     public Task ShowHistoryAsync(string id) => RunAsync(async () =>
         HistoryDetails = await Required(history).GetDetailsAsync(id));
@@ -160,7 +199,7 @@ public sealed partial class MainViewModel
         await settingsStore.SaveAsync(settings);
         Message = "Рекомендация сохранена для следующего запуска";
     });
-    public Task ApplyAndRestartAsync() => RunAsync(async () =>
+    public Task ApplyAndRestartAsync() => RunEngineActionAsync(async () =>
     {
         await tester.RecoverInterruptedTestAsync();
         if (SelectedStrategy is null) throw new InvalidOperationException("Выберите стратегию.");
@@ -174,7 +213,6 @@ public sealed partial class MainViewModel
             Status = await process.GetStatusAsync();
         }
         else Status = await process.RestartAsync(fresh);
-        await CheckConnectionCoreAsync();
         Message = "Выбранная стратегия и текущие фильтры применены";
     });
     public Task PrepareDistributionUpdateAsync() => RunAsync(async () =>

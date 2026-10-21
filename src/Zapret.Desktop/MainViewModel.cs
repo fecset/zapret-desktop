@@ -132,17 +132,16 @@ public sealed partial class MainViewModel(IZapretDistribution distribution, IStr
         Game = await filters.GetGameFilterAsync();
         IpSet = await filters.GetIpSetModeAsync();
     });
-    public Task StartAsync() => RunAsync(async () =>
+    public Task StartAsync() => RunEngineActionAsync(async () =>
     {
         await tester.RecoverInterruptedTestAsync();
         if (SelectedStrategy is null) throw new InvalidOperationException("Выберите стратегию.");
         var fresh = (await strategies.GetStrategiesAsync()).First(x => x.Id == SelectedStrategy.Id);
         Status = await process.StartAsync(fresh);
-        await CheckConnectionCoreAsync();
         Log("INFO", $"Запущена стратегия {SelectedStrategy.Name}; PID {Status.ProcessId}");
         Message = "Стратегия запущена";
     });
-    public Task StopAsync() => RunAsync(async () =>
+    public Task StopAsync() => RunEngineActionAsync(async () =>
     {
         try
         {
@@ -155,7 +154,7 @@ public sealed partial class MainViewModel(IZapretDistribution distribution, IStr
             Status = await process.GetStatusAsync();
             if (Status.State == ZapretRunState.Stopped) ConnectionHealth = null;
         }
-    });
+    }, checkConnection: false);
     public Task SelectAsync(ZapretStrategy? strategy) => RunAsync(async () =>
     {
         SelectedStrategy = strategy;
@@ -179,7 +178,7 @@ public sealed partial class MainViewModel(IZapretDistribution distribution, IStr
         Message = "IPSet Filter изменён. Перезапустите активную стратегию.";
         Log("INFO", $"IPSet Filter: {mode}");
     });
-    public Task ServiceAsync(string action) => RunAsync(async () =>
+    public Task ServiceAsync(string action) => RunEngineActionAsync(async () =>
     {
         switch (action)
         {
@@ -210,7 +209,6 @@ public sealed partial class MainViewModel(IZapretDistribution distribution, IStr
             case "manual": await service.SetAutoStartAsync(false); break;
         }
         Status = await process.GetStatusAsync();
-        if (action is "install" or "start" or "restart") await CheckConnectionCoreAsync();
         ServiceAutoStart = await service.GetAutoStartAsync();
         Log("INFO", $"Служба: {action}");
         Message = action switch
@@ -220,7 +218,7 @@ public sealed partial class MainViewModel(IZapretDistribution distribution, IStr
             "restart" => "Служба перезапущена.", "auto" => "Автозапуск службы включён.",
             "manual" => "Автозапуск службы выключен.", _ => "Состояние службы обновлено."
         };
-    });
+    }, checkConnection: action is "install" or "start" or "restart");
     public Task DiagnoseAsync() => RunAsync(async () =>
     {
         await RefreshDiagnosticsCoreAsync();
@@ -400,6 +398,7 @@ public sealed partial class MainViewModel(IZapretDistribution distribution, IStr
     {
         exitRequested = true;
         CancelStrategyTest();
+        CancelConnectionCheck();
         // The test holds this gate until its PowerShell and IPSet cleanup has finished.
         await operationGate.WaitAsync();
         try
@@ -442,9 +441,13 @@ public sealed partial class MainViewModel(IZapretDistribution distribution, IStr
         if (LogLevelFilter == "ALL" || LogLevelFilter == level) FilteredLogs.Insert(0, Logs[^1]);
         logger.LogInformation("{Level}: {Line}", level, line);
     }
-    private async Task RunAsync(Func<Task> action)
+    private async Task RunAsync(Func<Task> action, bool skipIfBusy = false)
     {
-        await operationGate.WaitAsync();
+        if (skipIfBusy)
+        {
+            if (!await operationGate.WaitAsync(0)) return;
+        }
+        else await operationGate.WaitAsync();
         try
         {
             if (exitRequested) return;

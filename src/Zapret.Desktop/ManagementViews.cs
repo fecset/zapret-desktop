@@ -247,7 +247,8 @@ public sealed partial class MainWindow
         ipRow.Children.Add(ipset);
         ipRow.Children.Add(Button("Применить", () => vm.SetIpSetAsync((IpSetMode)(ipset.SelectedItem ?? IpSetMode.None)), primary: true));
         stack.Children.Add(ipRow);
-        stack.Children.Add(Button("Применить и перезапустить Zapret", vm.ApplyAndRestartAsync));
+        stack.Children.Add(EngineButton("Применить и перезапустить Zapret", vm.ApplyAndRestartAsync,
+            () => vm.SelectedStrategy is not null && vm.Status?.State != ZapretRunState.External));
         page.Children.Add(Panel(stack));
     }
     private void AppSettings()

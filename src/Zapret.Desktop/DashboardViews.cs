@@ -29,14 +29,15 @@ public sealed partial class MainWindow
             state == ZapretRunState.External ? "Чтобы избежать конфликта, остановите внешний экземпляр там, где он был запущен." :
             "Выберите стратегию ниже и нажмите «Запустить Zapret». Для работы нужны права администратора.", 13, color: MutedBrush));
         hero.Children.Add(summary);
-        var mainAction = Button(running ? "Остановить Zapret" : "Запустить Zapret",
-            running ? vm.StopAsync : vm.StartAsync, primary: !running, danger: running);
+        var mainAction = EngineButton(running ? "Остановить Zapret" : "Запустить Zapret",
+            running ? vm.StopAsync : vm.StartAsync,
+            () => running || (state == ZapretRunState.Stopped && vm.SelectedStrategy is not null),
+            primary: !running, danger: running);
         mainAction.MinWidth = 177;
         mainAction.MinHeight = 46;
         mainAction.HorizontalContentAlignment = HorizontalAlignment.Center;
         mainAction.VerticalContentAlignment = VerticalAlignment.Center;
         mainAction.FontSize = 14;
-        mainAction.IsEnabled = running || (state == ZapretRunState.Stopped && vm.SelectedStrategy is not null);
         mainAction.VerticalAlignment = VerticalAlignment.Center;
         mainAction.Margin = new Thickness(28, 0, 0, 0);
         Grid.SetColumn(mainAction, 1);
@@ -66,7 +67,7 @@ public sealed partial class MainWindow
         if (state == ZapretRunState.Stopped && driverStatus is "Running" or "StartPending" or "StopPending")
         {
             page.Children.Add(Text("WinDivert ещё загружен. Нажмите «Выгрузить WinDivert», чтобы освободить файлы для обновления.", 13, color: WarnBrush));
-            page.Children.Add(Button("Выгрузить WinDivert", vm.StopAsync));
+            page.Children.Add(EngineButton("Выгрузить WinDivert", vm.StopAsync));
         }
 
         var strategy = new Grid { ColumnDefinitions = new ColumnDefinitions("*,Auto"), RowDefinitions = new RowDefinitions("Auto,Auto") };
@@ -80,7 +81,8 @@ public sealed partial class MainWindow
         Grid.SetColumn(picker, 1);
         strategy.Children.Add(picker);
         page.Children.Add(Panel(strategy));
-        page.Children.Add(Button("Применить выбор и перезапустить", vm.ApplyAndRestartAsync));
+        page.Children.Add(EngineButton("Применить выбор и перезапустить", vm.ApplyAndRestartAsync,
+            () => vm.SelectedStrategy is not null && state != ZapretRunState.External));
 
         var section = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 10, Margin = new Thickness(0, 9, 0, 0) };
         section.Children.Add(Text("Быстрые действия", 17, FontWeight.SemiBold));
@@ -193,15 +195,13 @@ public sealed partial class MainWindow
             row.Children.Add(info);
             var actions = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 7,
                 VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(15, 0, 0, 0) };
-            var select = Button(selected ? "Выбрана" : "Выбрать", () => vm.SelectAsync(item));
-            select.IsEnabled = !selected;
+            var select = EngineButton(selected ? "Выбрана" : "Выбрать", () => vm.SelectAsync(item), () => !selected);
             actions.Children.Add(select);
-            var start = Button("Запустить", async () =>
+            var start = EngineButton("Запустить", async () =>
             {
                 await vm.SelectAsync(item);
                 await vm.StartAsync();
-            }, primary: true);
-            start.IsEnabled = vm.Status?.State == ZapretRunState.Stopped;
+            }, () => vm.Status?.State == ZapretRunState.Stopped, primary: true);
             actions.Children.Add(start);
             Grid.SetColumn(actions, 1);
             row.Children.Add(actions);
