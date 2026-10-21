@@ -24,8 +24,7 @@ public class UpdateServiceTests
                 Content = new StringContent($$"""{"tag_name":"{{tag}}","html_url":"{{url}}"}""", Encoding.UTF8, "application/json")
             };
         }));
-        var updates = new GitHubUpdateService(new ZapretDistribution(
-            Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "../../../../../zapret"))), client);
+        var updates = new GitHubUpdateService(new OlderDistribution(), client);
 
         var upstream = await updates.CheckUpstreamAsync();
         var desktop = await updates.CheckDesktopAsync("0.1.1");
@@ -54,6 +53,15 @@ public class UpdateServiceTests
         var updates = new GitHubUpdateService(new ZapretDistribution(Path.GetTempPath()), client);
 
         Assert.Equal(expected, (await updates.CheckDesktopAsync(local)).Available);
+    }
+
+    private sealed class OlderDistribution : Zapret.Core.IZapretDistribution
+    {
+        public string Root => Path.GetTempPath();
+        public string BinDirectory => Path.Combine(Root, "bin");
+        public string ListsDirectory => Path.Combine(Root, "lists");
+        public string Version => "1.10.3";
+        public IReadOnlyList<string> Validate() => [];
     }
 
     private sealed class ReleaseHandler(Func<HttpRequestMessage, HttpResponseMessage> respond) : HttpMessageHandler

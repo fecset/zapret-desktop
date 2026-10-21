@@ -129,7 +129,7 @@ public class IntegrationTests
     [Fact]
     public void DetectsLocalVersion()
     {
-        Assert.Equal("1.10.3", new ZapretDistribution(Root).Version);
+        Assert.Equal("1.10.4", new ZapretDistribution(Root).Version);
     }
 
     [Fact]

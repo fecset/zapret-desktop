@@ -1,8 +1,6 @@
-param([switch]$DesktopMode, [string]$DistributionRoot)
-
 $hasErrors = $false
 
-$rootDir = if ($DistributionRoot) { $DistributionRoot } else { Split-Path $PSScriptRoot }
+$rootDir = Split-Path $PSScriptRoot
 $listsDir = Join-Path $rootDir "lists"
 $utilsDir = Join-Path $rootDir "utils"
 $resultsDir = Join-Path $utilsDir "test results"
@@ -34,31 +32,19 @@ function Set-IpsetMode {
     param([string]$mode)
     $listFile = Join-Path $listsDir "ipset-all.txt"
     $backupFile = Join-Path $listsDir "ipset-all.test-backup.txt"
-    $flagFile = Join-Path $rootDir "ipset_switched.flag"
     if ($mode -eq "any") {
-        if (Test-Path -LiteralPath $flagFile) { throw "Restore the previous IPSet backup before starting another test." }
         # Always backup current file (even if none)
-        if (Test-Path -LiteralPath $listFile) {
-            Copy-Item -LiteralPath $listFile -Destination $backupFile -Force -ErrorAction Stop
+        if (Test-Path $listFile) {
+            Copy-Item $listFile $backupFile -Force
         } else {
             # If none, create empty backup
-            [IO.File]::WriteAllText($backupFile, '')
+            "" | Out-File $backupFile -Encoding UTF8
         }
-        # Mark the completed backup before changing IPSet so interruption is always recoverable.
-        [IO.File]::WriteAllText($flagFile, '')
-        "" | Out-File -LiteralPath $listFile -Encoding UTF8 -ErrorAction Stop
+        # Make file empty
+        "" | Out-File $listFile -Encoding UTF8
     } elseif ($mode -eq "restore") {
-        # An unmarked backup may be stale or incomplete; the current list is already safe.
-        if (-not (Test-Path -LiteralPath $flagFile)) { return }
-        if (Test-Path -LiteralPath $backupFile) {
-            # Keep the backup until restoration and marker removal both succeed.
-            Copy-Item -LiteralPath $backupFile -Destination $listFile -Force -ErrorAction Stop
-            if (Test-Path -LiteralPath $flagFile) {
-                Remove-Item -LiteralPath $flagFile -Force -ErrorAction Stop
-            }
-            Remove-Item -LiteralPath $backupFile -Force -ErrorAction Stop
-        } else {
-            throw "Unable to restore IPSet: the test backup is missing."
+        if (Test-Path $backupFile) {
+            Move-Item $backupFile $listFile -Force
         }
     }
 }
@@ -68,7 +54,6 @@ function Set-IpsetMode {
 # input buffer and would be swallowed instantly by a bare ReadKey.
 function Wait-AnyKey {
     param([string]$message = "Press any key to close...")
-    if ($DesktopMode) { return }
     Write-Host $message -ForegroundColor Yellow
     try {
         while ([System.Console]::KeyAvailable) { [void][System.Console]::ReadKey($true) }
@@ -84,6 +69,7 @@ trap {
     if ($originalIpsetStatus -and $originalIpsetStatus -ne "any") {
         Set-IpsetMode -mode "restore"
     }
+    Remove-Item -Path $ipsetFlagFile -ErrorAction SilentlyContinue
     Wait-AnyKey
     break
 }
@@ -387,6 +373,7 @@ $ipsetFlagFile = Join-Path $rootDir "ipset_switched.flag"
 if (Test-Path $ipsetFlagFile) {
     Write-Host "[INFO] Detected leftover ipset switch flag. Restoring ipset..." -ForegroundColor Yellow
     Set-IpsetMode -mode "restore"
+    Remove-Item -Path $ipsetFlagFile -ErrorAction SilentlyContinue
 }
 
 # Get original ipset status early
@@ -421,7 +408,6 @@ $dpiTargets = @()
 $targetDir = $rootDir
 if (-not $targetDir) { $targetDir = Split-Path -Parent $MyInvocation.MyCommand.Path }
 $batFiles = Get-ChildItem -Path $targetDir -Filter "*.bat" | Where-Object { $_.Name -notlike "service*" } | Sort-Object { [Regex]::Replace($_.Name, "(\d+)", { $args[0].Value.PadLeft(8, "0") }) }
-if ($DesktopMode) { $batFiles = @($batFiles | Where-Object { $_.Name -like 'general*.bat' }) }
 
 $globalResults = @()
 
@@ -534,8 +520,8 @@ function Read-ConfigSelection {
 
 while ($true) {
     $globalResults = @()
-$testType = if ($DesktopMode) { 'standard' } else { Read-TestType }
-$mode = if ($DesktopMode) { 'all' } else { Read-ModeSelection }
+$testType = Read-TestType
+$mode = Read-ModeSelection
 if ($mode -eq 'select') {
     $selected = Read-ConfigSelection -allFiles $batFiles
     $batFiles = @($selected)
@@ -601,11 +587,6 @@ if (-not $batFiles -or $batFiles.Count -eq 0) {
 
 # Stop winws
 function Stop-Zapret {
-    if ($DesktopMode) {
-        Write-Host "__ZD_STOP__"
-        [void][Console]::ReadLine()
-        return
-    }
     Get-Process -Name "winws" -ErrorAction SilentlyContinue | Stop-Process -Force
 }
 
@@ -676,6 +657,8 @@ try {
     if (($originalIpsetStatus -ne "any") -and ($testType -eq 'dpi')) {
         Write-Host "[WARNING] Ipset is in '$originalIpsetStatus' mode. Switching to 'any' for accurate DPI tests..." -ForegroundColor Yellow
         Set-IpsetMode -mode "any"
+        # Create flag file to indicate ipset was switched
+        "" | Out-File -FilePath $ipsetFlagFile -Encoding UTF8
     }
     Write-Host "[WARNING] Tests may take several minutes to complete. Please wait..." -ForegroundColor Yellow
 
@@ -692,21 +675,12 @@ try {
     
     # Start config
     Write-Host "  > Starting config..." -ForegroundColor Cyan
-    $proc = $null
-    if ($DesktopMode) {
-        Write-Host "__ZD_START__|$($file.Name)"
-        if ([Console]::ReadLine() -ne 'OK') {
-            Write-Host "  > Strategy failed to start (winws process not found). Skipping..." -ForegroundColor Red
-            continue
-        }
-    } else {
-        $proc = Start-Process -FilePath "cmd.exe" -ArgumentList "/c `"$($file.FullName)`"" -WorkingDirectory $targetDir -PassThru -WindowStyle Minimized
-    }
+    $proc = Start-Process -FilePath "cmd.exe" -ArgumentList "/c `"$($file.FullName)`"" -WorkingDirectory $targetDir -PassThru -WindowStyle Minimized
     
     # Wait init
     if (-not (Wait-WinwsReady)) {
         Write-Host "  > Strategy failed to start (winws process not found). Skipping..." -ForegroundColor Red
-        if ($proc -and -not $proc.HasExited) { Stop-Process -Id $proc.Id -Force -ErrorAction SilentlyContinue }
+        if (-not $proc.HasExited) { Stop-Process -Id $proc.Id -Force -ErrorAction SilentlyContinue }
         continue
     }
     
@@ -877,19 +851,6 @@ try {
         }
 
         $globalResults += @{ Config = $file.Name; Type = 'standard'; Results = $targetResults }
-        if ($DesktopMode) {
-            $httpOk = $httpFail = $unsupported = $pingOk = $pingFail = 0
-            foreach ($result in $targetResults) {
-                foreach ($token in $result.HttpTokens) {
-                    if ($token -match ':OK\b') { $httpOk++ }
-                    elseif ($token -match ':ERROR\b|:SSL\b') { $httpFail++ }
-                    elseif ($token -match ':UNSUP\b') { $unsupported++ }
-                }
-                if ($result.PingResult -eq 'Timeout') { $pingFail++ }
-                elseif ($result.PingResult -ne 'n/a') { $pingOk++ }
-            }
-            Write-Host "__ZD_RESULT__|$($file.Name)|$httpOk|$httpFail|$unsupported|$pingOk|$pingFail"
-        }
     } else {
         Write-Host "  > Running DPI checkers..." -ForegroundColor DarkGray
         $dpiResults = Invoke-DpiSuite -Targets $dpiTargets -TimeoutSeconds $dpiTimeoutSeconds -RangeBytes $dpiRangeBytes -MaxParallel $dpiMaxParallel
@@ -898,7 +859,7 @@ try {
     
     # Stop
     Stop-Zapret
-    if ($proc -and -not $proc.HasExited) { Stop-Process -Id $proc.Id -Force -ErrorAction SilentlyContinue }
+    if (-not $proc.HasExited) { Stop-Process -Id $proc.Id -Force -ErrorAction SilentlyContinue }
 }
 
     Write-Host ""
@@ -1043,6 +1004,7 @@ try {
     if ($originalIpsetStatus -and $originalIpsetStatus -ne "any") {
         Set-IpsetMode -mode "restore"
     }
+    Remove-Item -Path $ipsetFlagFile -ErrorAction SilentlyContinue
 } finally {
     Stop-Zapret
     Restore-WinwsSnapshot -snapshot $originalWinws
@@ -1050,6 +1012,7 @@ try {
         Write-Host "[INFO] Restoring original ipset mode..." -ForegroundColor DarkGray
         Set-IpsetMode -mode "restore"
     }
+    Remove-Item -Path $ipsetFlagFile -ErrorAction SilentlyContinue
 }
 
     Wait-AnyKey

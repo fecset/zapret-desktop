@@ -6,7 +6,7 @@
     <Nullable>enable</Nullable>
   </PropertyGroup>
   <ItemGroup>
-    <EmbeddedResource Include="../../zapret/utils/test zapret.ps1" LogicalName="Zapret.Infrastructure.DesktopStrategyTest.ps1" />
+    <EmbeddedResource Include="Scripts/TestStrategies.ps1" LogicalName="Zapret.Infrastructure.DesktopStrategyTest.ps1" />
     <InternalsVisibleTo Include="Zapret.Core.Tests" />
     <ProjectReference Include="../Zapret.Core/Zapret.Core.csproj" />
     <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" Version="10.0.0" />
