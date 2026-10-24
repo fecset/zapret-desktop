@@ -12,7 +12,8 @@ public sealed class UserDataBackupService : IUserDataBackupService
     private const int MaxFileBytes = 16 * 1024 * 1024;
     private const int MaxArchiveBytes = 64 * 1024 * 1024;
     private const int MaxManifestBytes = 64 * 1024;
-    private const int MaxBackups = 50;
+    private const int MaxAutomaticBackups = 10;
+    private const int MaxAutomaticIndexBytes = 64 * 1024;
     private static readonly string[] ManagedFiles = [
         "lists/list-general.txt", "lists/list-general-user.txt", "lists/list-exclude.txt", "lists/list-exclude-user.txt",
         "lists/list-google.txt", "lists/list-custom.txt", "lists/ipset-exclude.txt", "lists/ipset-exclude-user.txt",
@@ -39,10 +40,16 @@ public sealed class UserDataBackupService : IUserDataBackupService
         await paths.Gate.WaitAsync(cancellationToken);
         try
         {
-            var backup = await SaveBackupAsync(await CaptureAsync(cancellationToken), reason, cancellationToken);
-            await PruneBackupsAsync(null, cancellationToken);
-            return backup;
+            return (await SaveBackupAsync(await CaptureAsync(cancellationToken), reason, cancellationToken)).Info;
         }
+        finally { paths.Gate.Release(); }
+    }
+
+    public async Task<UserDataBackupInfo> CreateAutomaticAsync(string reason, CancellationToken cancellationToken = default)
+    {
+        ValidateReason(reason);
+        await paths.Gate.WaitAsync(cancellationToken);
+        try { return await SaveAutomaticBackupAsync(await CaptureAsync(cancellationToken), reason, cancellationToken); }
         finally { paths.Gate.Release(); }
     }
 
@@ -123,14 +130,82 @@ public sealed class UserDataBackupService : IUserDataBackupService
         return files;
     }
 
-    private async Task<UserDataBackupInfo> SaveBackupAsync(Dictionary<string, byte[]> files, string reason, CancellationToken ct)
+    private async Task<SavedBackup> SaveBackupAsync(Dictionary<string, byte[]> files, string reason, CancellationToken ct)
     {
         var id = Guid.NewGuid().ToString("N");
         var file = paths.BackupFile(id);
         using var archive = new MemoryStream();
         var manifest = await WriteArchiveAsync(archive, files, reason, ct);
-        await DataProtectionPaths.WriteAsync(paths.DataRoot, file, archive.ToArray(), ct);
-        return new(id, manifest.CreatedAt, reason, files.Count, archive.Length);
+        var bytes = archive.ToArray();
+        await DataProtectionPaths.WriteAsync(paths.DataRoot, file, bytes, ct);
+        return new(new(id, manifest.CreatedAt, reason, files.Count, archive.Length), Convert.ToHexString(SHA256.HashData(bytes)));
+    }
+
+    private async Task<UserDataBackupInfo> SaveAutomaticBackupAsync(Dictionary<string, byte[]> files, string reason,
+        CancellationToken ct, string? protectedBackupId = null)
+    {
+        // A recovery snapshot must pass the same validation required to restore it.
+        ValidateSettings(files["settings.json"]);
+        if (files.TryGetValue("utils/game_filter.enabled", out var filter)) ValidateGameFilter(filter);
+        var owned = new List<AutomaticBackupEntry>();
+        UserDataBackupInfo? matching = null;
+        foreach (var entry in await ReadAutomaticIndexAsync(ct))
+        {
+            try
+            {
+                var backup = await ReadAutomaticBackupAsync(entry, ct);
+                owned.Add(entry);
+                if (SnapshotsEqual(files, backup.Snapshot.Files)) matching = backup.Info;
+            }
+            catch (Exception ex) when (ex is InvalidDataException or IOException or JsonException or UnauthorizedAccessException or InvalidOperationException) { }
+        }
+        if (matching is null)
+        {
+            var saved = await SaveBackupAsync(files, reason, ct);
+            matching = saved.Info;
+            owned.Add(new(matching.Id, saved.ArchiveSha256));
+        }
+        await WriteAutomaticIndexAsync(owned, ct);
+        await PruneAutomaticBackupsAsync(owned, matching.Id, protectedBackupId, ct);
+        return matching;
+    }
+
+    private string AutomaticIndexFile => DataProtectionPaths.RequireSafe(paths.DataRoot,
+        Path.Combine(paths.BackupsDirectory, "automatic-backups.json"));
+
+    private async Task<IReadOnlyList<AutomaticBackupEntry>> ReadAutomaticIndexAsync(CancellationToken ct)
+    {
+        try
+        {
+            var file = AutomaticIndexFile;
+            if (!File.Exists(file)) return [];
+            var bytes = await ReadLimitedAsync(File.OpenRead(file), MaxAutomaticIndexBytes, ct, dispose: true);
+            var index = JsonSerializer.Deserialize<AutomaticBackupIndex>(bytes, JsonOptions);
+            if (index is not { Version: 1, Backups: not null }) return [];
+            var identifiers = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            foreach (var entry in index.Backups)
+            {
+                if (entry is null || !Guid.TryParseExact(entry.Id, "N", out _) || !identifiers.Add(entry.Id) ||
+                    entry.ArchiveSha256 is not { Length: 64 } || !entry.ArchiveSha256.All(char.IsAsciiHexDigit)) return [];
+            }
+            return index.Backups;
+        }
+        // Missing or damaged ownership metadata must never adopt legacy/manual archives.
+        catch (Exception ex) when (ex is InvalidDataException or IOException or JsonException or UnauthorizedAccessException or InvalidOperationException) { return []; }
+    }
+
+    private Task WriteAutomaticIndexAsync(List<AutomaticBackupEntry> backups, CancellationToken ct) =>
+        DataProtectionPaths.WriteAsync(paths.DataRoot, AutomaticIndexFile,
+            JsonSerializer.SerializeToUtf8Bytes(new AutomaticBackupIndex(1, backups), JsonOptions), ct);
+
+    private async Task<AutomaticBackupSnapshot> ReadAutomaticBackupAsync(AutomaticBackupEntry entry, CancellationToken ct)
+    {
+        var bytes = await ReadLimitedAsync(File.OpenRead(paths.BackupFile(entry.Id)), MaxArchiveBytes, ct, dispose: true);
+        if (!Convert.ToHexString(SHA256.HashData(bytes)).Equals(entry.ArchiveSha256, StringComparison.OrdinalIgnoreCase))
+            throw new InvalidDataException("Automatic backup ownership checksum does not match.");
+        using var stream = new MemoryStream(bytes);
+        var snapshot = await ReadArchiveAsync(stream, ct);
+        return new(new(entry.Id, snapshot.Manifest.CreatedAt, snapshot.Manifest.Reason, snapshot.Files.Count, bytes.Length), snapshot);
     }
 
     private async Task ApplyWithBackupAsync(Dictionary<string, byte[]> files, string reason, CancellationToken ct, string? protectedBackupId = null)
@@ -139,7 +214,8 @@ public sealed class UserDataBackupService : IUserDataBackupService
         foreach (var name in ManagedFiles.Concat(OriginalFiles)) ResolveFile(name);
         DataProtectionPaths.RequireSafe(paths.DataRoot, Path.Combine(paths.DataRoot, "settings.json"));
         var before = await CaptureAsync(ct);
-        await SaveBackupAsync(before, reason, ct);
+        if (!HasEffectiveChanges(before, files)) return;
+        await SaveAutomaticBackupAsync(before, reason, ct, protectedBackupId);
         var changed = new List<string>();
         var settingsChanged = false;
         try
@@ -181,31 +257,46 @@ public sealed class UserDataBackupService : IUserDataBackupService
                 throw new AggregateException("Restore failed; the pre-operation backup is available for recovery.", new[] { failure }.Concat(rollbackFailures));
             throw;
         }
-        await PruneBackupsAsync(protectedBackupId, ct);
     }
 
-    private async Task PruneBackupsAsync(string? protectedId, CancellationToken ct)
+    private static bool SnapshotsEqual(Dictionary<string, byte[]> first, Dictionary<string, byte[]> second) =>
+        first.Count == second.Count && first.All(pair => second.TryGetValue(pair.Key, out var bytes) && pair.Value.AsSpan().SequenceEqual(bytes));
+
+    private static bool HasEffectiveChanges(Dictionary<string, byte[]> before, Dictionary<string, byte[]> files)
+    {
+        foreach (var name in ManagedFiles)
+        {
+            before.TryGetValue(name, out var old);
+            files.TryGetValue(name, out var value);
+            if (old is null ? value is not null : value is null || !old.AsSpan().SequenceEqual(value)) return true;
+        }
+        if (OriginalFiles.Any(name => !before.ContainsKey(name) && files.ContainsKey(name))) return true;
+        var settings = JsonSerializer.SerializeToUtf8Bytes(ValidateSettings(files["settings.json"]), JsonOptions);
+        return !before["settings.json"].AsSpan().SequenceEqual(settings);
+    }
+
+    private async Task PruneAutomaticBackupsAsync(List<AutomaticBackupEntry> backups, string currentId,
+        string? protectedId, CancellationToken ct)
     {
         try
         {
-            paths.BackupFile(Guid.Empty.ToString("N"));
-            var candidates = Directory.EnumerateFiles(paths.BackupsDirectory, "*.zip", SearchOption.TopDirectoryOnly)
-                .Select(file => new { Id = Path.GetFileNameWithoutExtension(file), Modified = File.GetLastWriteTimeUtc(file) })
-                .Where(item => Guid.TryParseExact(item.Id, "N", out _)).OrderBy(item => item.Modified).ToArray();
-            var excess = candidates.Length - MaxBackups;
-            foreach (var item in candidates)
+            var excess = backups.Count - MaxAutomaticBackups;
+            foreach (var entry in backups.ToArray())
             {
                 if (excess <= 0 || ct.IsCancellationRequested) break;
-                if (item.Id.Equals(protectedId, StringComparison.OrdinalIgnoreCase)) continue;
+                if (entry.Id.Equals(currentId, StringComparison.OrdinalIgnoreCase) ||
+                    entry.Id.Equals(protectedId, StringComparison.OrdinalIgnoreCase)) continue;
                 try
                 {
-                    // Only remove a valid backup owned by this archive format.
-                    await using (var stream = File.OpenRead(paths.BackupFile(item.Id))) await ReadArchiveAsync(stream, ct);
-                    File.Delete(paths.BackupFile(item.Id));
+                    // Revalidate the exact indexed archive before deleting it; a replaced copy is protected.
+                    await ReadAutomaticBackupAsync(entry, ct);
+                    File.Delete(paths.BackupFile(entry.Id));
+                    backups.Remove(entry);
                     excess--;
                 }
-                catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidOperationException) { }
+                catch (Exception ex) when (ex is InvalidDataException or IOException or JsonException or UnauthorizedAccessException or InvalidOperationException) { }
             }
+            await WriteAutomaticIndexAsync(backups, ct);
         }
         // Retention must not turn a completed save/restore into a reported failure.
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidOperationException or OperationCanceledException) { }
@@ -330,6 +421,7 @@ public sealed class UserDataBackupService : IUserDataBackupService
                     case nameof(DesktopSettings.StartZapretOnLaunch):
                     case nameof(DesktopSettings.MinimizeToTray):
                     case nameof(DesktopSettings.CheckUpdates):
+                    case nameof(DesktopSettings.CheckConnectionAfterStart):
                         if (property.Value.ValueKind is not (JsonValueKind.True or JsonValueKind.False)) throw new JsonException();
                         break;
                     default: throw new JsonException();
@@ -367,4 +459,8 @@ public sealed class UserDataBackupService : IUserDataBackupService
     private sealed record ArchiveFile(long Length, string Sha256);
     private sealed record ArchiveManifest(int Version, DateTimeOffset CreatedAt, string Reason, Dictionary<string, ArchiveFile> Files);
     private sealed record ArchiveSnapshot(ArchiveManifest Manifest, Dictionary<string, byte[]> Files);
+    private sealed record SavedBackup(UserDataBackupInfo Info, string ArchiveSha256);
+    private sealed record AutomaticBackupEntry(string Id, string ArchiveSha256);
+    private sealed record AutomaticBackupIndex(int Version, List<AutomaticBackupEntry> Backups);
+    private sealed record AutomaticBackupSnapshot(UserDataBackupInfo Info, ArchiveSnapshot Snapshot);
 }

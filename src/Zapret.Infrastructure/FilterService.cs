@@ -1,4 +1,3 @@
-using System.Text.RegularExpressions;
 using Zapret.Core;
 
 namespace Zapret.Infrastructure;
@@ -38,16 +37,39 @@ public sealed class FilterService(IZapretDistribution distribution) : IFilterSer
         return AtomicFiles.WriteTextAsync(GameFile,
             $"mode={value.Mode.ToString().ToLowerInvariant()}\ntcp={value.TcpPorts}\nudp={value.UdpPorts}\n", cancellationToken);
     }
-    public static bool ValidPorts(string value)
+    public static bool ValidPorts(string value) => FilterRules.ValidPorts(value);
+
+    public async Task SetFiltersAsync(GameFilterSettings game, IpSetMode mode, CancellationToken cancellationToken = default)
     {
-        if (!Regex.IsMatch(value, @"^\d+(?:-\d+)?(?:,\d+(?:-\d+)?)*$")) return false;
-        foreach (var range in value.Split(','))
+        FilterRules.Validate(game, mode);
+        var before = new Dictionary<string, byte[]?>();
+        foreach (var file in new[] { GameFile, IpSetFile, BackupFile })
         {
-            var ends = range.Split('-');
-            if (!int.TryParse(ends[0], out var first) || first is < 1 or > 65535) return false;
-            if (ends.Length == 2 && (!int.TryParse(ends[1], out var last) || last < first || last > 65535)) return false;
+            DataProtectionPaths.RequireSafe(distribution.Root, file);
+            before[file] = File.Exists(file) ? await File.ReadAllBytesAsync(file, cancellationToken) : null;
         }
-        return true;
+        try
+        {
+            await SetIpSetModeAsync(mode, cancellationToken);
+            await SetGameFilterAsync(game, cancellationToken);
+        }
+        catch (Exception failure)
+        {
+            var failures = new List<Exception> { failure };
+            foreach (var (file, bytes) in before)
+            {
+                try
+                {
+                    DataProtectionPaths.RequireSafe(distribution.Root, file);
+                    if (bytes is null) { if (File.Exists(file)) File.Delete(file); }
+                    else if (!File.Exists(file) || !(await File.ReadAllBytesAsync(file)).AsSpan().SequenceEqual(bytes))
+                        await AtomicFiles.WriteBytesAsync(file, bytes);
+                }
+                catch (Exception rollback) { failures.Add(rollback); }
+            }
+            if (failures.Count > 1) throw new AggregateException("Не удалось полностью вернуть прежние фильтры. Используйте резервную копию.", failures);
+            throw;
+        }
     }
     public async Task<IpSetMode> GetIpSetModeAsync(CancellationToken cancellationToken = default)
     {

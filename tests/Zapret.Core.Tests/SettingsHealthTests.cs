@@ -6,6 +6,18 @@ namespace Zapret.Core.Tests;
 public sealed class SettingsHealthTests
 {
     [Fact]
+    public async Task OlderSettingsKeepAutomaticConnectionChecksEnabled()
+    {
+        var file = Path.Combine(Path.GetTempPath(), "Zapret-old-settings-" + Guid.NewGuid().ToString("N") + ".json");
+        try
+        {
+            await File.WriteAllTextAsync(file, "{\"Theme\":\"Dark\",\"CheckUpdates\":false}");
+            Assert.True((await new JsonSettingsStore(file).LoadAsync()).CheckConnectionAfterStart);
+        }
+        finally { File.Delete(file); }
+    }
+
+    [Fact]
     public async Task CorruptSettingsAreReportedAndPreservedBeforeDefaultsAreSaved()
     {
         var root = Path.Combine(Path.GetTempPath(), "ZapretSettings-" + Guid.NewGuid().ToString("N"));

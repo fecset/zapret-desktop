@@ -273,8 +273,9 @@ public sealed class ManagedUpdateService : IManagedUpdateService
         if (File.Exists(hostsPath) && new FileInfo(hostsPath).Length > 4 * 1024 * 1024)
             throw new InvalidDataException("The local hosts file exceeds the preview limit.");
         var currentBytes = File.Exists(hostsPath) ? await File.ReadAllBytesAsync(hostsPath, cancellationToken) : [];
-        var current = Decode(currentBytes);
-        var retained = current;
+        var current = new UTF8Encoding(false, true).GetString(currentBytes);
+        var managedBlock = HostsBegin + "\r\n" + upstream.TrimEnd().Replace("\n", "\r\n") + "\r\n" + HostsEnd;
+        string proposed;
         var begin = current.IndexOf(HostsBegin, StringComparison.Ordinal);
         var end = current.IndexOf(HostsEnd, StringComparison.Ordinal);
         if ((begin < 0) != (end < 0) || (begin >= 0 && (end < begin ||
@@ -284,7 +285,8 @@ public sealed class ManagedUpdateService : IManagedUpdateService
         if (begin >= 0)
         {
             // Markers must occupy whole lines, otherwise unrelated content could be removed.
-            if ((begin > 0 && current[begin - 1] != '\n') || (end > 0 && current[end - 1] != '\n'))
+            if ((begin > 0 && current[begin - 1] != '\n' && !(begin == 1 && current[0] == '\uFEFF')) ||
+                (end > 0 && current[end - 1] != '\n'))
                 throw new InvalidDataException("Hosts managed markers must be on separate lines.");
             var afterBegin = begin + HostsBegin.Length;
             if (afterBegin < current.Length && current[afterBegin] is not ('\r' or '\n'))
@@ -292,14 +294,18 @@ public sealed class ManagedUpdateService : IManagedUpdateService
             var afterEnd = end + HostsEnd.Length;
             if (afterEnd < current.Length && current[afterEnd] is not ('\r' or '\n'))
                 throw new InvalidDataException("Hosts managed markers must be on separate lines.");
-            if (afterEnd < current.Length && current[afterEnd] == '\r') afterEnd++;
-            if (afterEnd < current.Length && current[afterEnd] == '\n') afterEnd++;
-            retained = current[..begin] + current[afterEnd..];
+            proposed = current[..begin] + managedBlock + current[afterEnd..];
         }
-        var proposed = retained + (retained.Length > 0 && !retained.EndsWith('\n') ? "\r\n" : "") +
-            HostsBegin + "\r\n" + upstream.TrimEnd().Replace("\n", "\r\n") + "\r\n" + HostsEnd + "\r\n";
+        else
+            proposed = current + (current.Length > 0 && !current.EndsWith('\n') ? "\r\n" : "") + managedBlock + "\r\n";
         var preview = new HostsUpdatePreview(Guid.NewGuid().ToString("N"), HostsSource, hostsPath, current, proposed,
-            count, $"{count} сопоставлений hosts. Пользовательские строки сохранены. Применение изменит системный hosts и создаст резервную копию.");
+            count, "");
+        preview = preview with
+        {
+            Summary = preview.HasChanges
+                ? $"{count} сопоставлений hosts. Добавлено: {preview.AddedCount}; удалено: {preview.RemovedCount}. Пользовательские строки сохранены. Применение изменит системный hosts и создаст резервную копию."
+                : "Изменений hosts нет. Файл и резервные копии останутся без изменений."
+        };
         hosts[preview.Id] = new(preview, File.Exists(hostsPath) ? Hash(currentBytes) : "missing");
         return preview;
     }
@@ -314,6 +320,11 @@ public sealed class ManagedUpdateService : IManagedUpdateService
             UpdateFiles.RequireNoLinks(hostsPath);
             if (known.CurrentHash != UpdateFiles.HashFileOrMissing(hostsPath))
                 throw new InvalidOperationException("The hosts file changed after the preview. Review a new preview before applying it.");
+            if (!preview.HasChanges)
+            {
+                hosts.TryRemove(preview.Id, out _);
+                return new(hostsPath, null, "Изменений hosts нет. Файл и резервные копии не изменены.", Changed: false);
+            }
             var backup = await UpdateFiles.ReplaceTextAsync(hostsPath, preview.ProposedContent, cancellationToken);
             hosts.TryRemove(preview.Id, out _);
             return new(hostsPath, backup, "hosts применён. Резервная копия: " + backup);

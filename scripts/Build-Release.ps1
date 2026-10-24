@@ -73,7 +73,7 @@ try {
 
     Copy-Item -LiteralPath (Join-Path $repositoryRoot 'LICENSE') -Destination (Join-Path $publishRoot 'LICENSE') -Force
     Copy-Item -LiteralPath (Join-Path $repositoryRoot 'THIRD_PARTY_NOTICES.md') -Destination (Join-Path $publishRoot 'THIRD_PARTY_NOTICES.md') -Force
-    Copy-Item -LiteralPath (Join-Path $repositoryRoot 'README.md') -Destination (Join-Path $publishRoot 'README.md') -Force
+    Copy-Item -LiteralPath (Join-Path $repositoryRoot 'docs/README-release.md') -Destination (Join-Path $publishRoot 'README.md') -Force
     $releaseNotesPath = Join-Path $repositoryRoot "docs/releases/v$Version.md"
     if (Test-Path -LiteralPath $releaseNotesPath -PathType Leaf) {
         Copy-Item -LiteralPath $releaseNotesPath -Destination (Join-Path $publishRoot 'RELEASE_NOTES.md') -Force

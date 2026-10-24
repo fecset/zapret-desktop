@@ -42,6 +42,24 @@ public sealed class ListService(IZapretDistribution distribution) : IListService
         if (lines.Any(x => x.Equals(entry, StringComparison.OrdinalIgnoreCase))) return;
         await WriteLinesAsync(path, original, lines.Append(entry), cancellationToken);
     }
+    public async Task<bool> WouldChangeAsync(string fileName, string entry, bool remove, CancellationToken cancellationToken = default)
+    {
+        var lines = await File.ReadAllLinesAsync(Resolve(fileName), cancellationToken);
+        if (!remove)
+        {
+            entry = ValidateEntry(fileName, entry);
+            return !lines.Any(line => line.Equals(entry, StringComparison.OrdinalIgnoreCase));
+        }
+        entry = entry.Trim();
+        if (entry.Length == 0) throw new ArgumentException("Выберите запись или введите домен/IP-адрес для удаления.");
+        if (!lines.Any(line => line.Trim().Equals(entry, StringComparison.OrdinalIgnoreCase)))
+        {
+            entry = ValidateEntry(fileName, entry);
+            if (!lines.Any(line => line.Trim().Equals(entry, StringComparison.OrdinalIgnoreCase)))
+                throw new InvalidOperationException("Запись не найдена в выбранном файле.");
+        }
+        return true;
+    }
     public async Task RemoveEntryAsync(string fileName, string entry, CancellationToken cancellationToken = default)
     {
         var path = Resolve(fileName);

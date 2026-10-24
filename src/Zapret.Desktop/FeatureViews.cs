@@ -14,13 +14,14 @@ public sealed partial class MainWindow
     {
         var stack = new StackPanel { Spacing = 8 };
         stack.Children.Add(Text("Доступность сервисов", 16, FontWeight.SemiBold));
-        stack.Children.Add(Text("Проверка HTTP/TLS отдельно от состояния движка. Она не подтверждает голосовую связь Discord.", 12, color: MutedBrush));
-        stack.Children.Add(EngineButton("Проверить соединение", vm.CheckConnectionAsync));
+        stack.Children.Add(Text("Проверяем ответы контрольных HTTPS-адресов. Воспроизведение видео YouTube и голосовая связь Discord проверяются отдельно.", 12, color: MutedBrush));
+        stack.Children.Add(EngineButton("Проверить соединение", vm.CheckConnectionAsync,
+            isLoading: () => vm.CheckingConnection));
         if (vm.ConnectionHealth is { } health)
         {
             stack.Children.Add(Text("Последняя проверка: " + health.CheckedAt.ToLocalTime().ToString("g"), 11, color: MutedBrush));
             foreach (var target in health.Targets)
-                stack.Children.Add(Text($"{target.Name}: {(target.Passed ? "доступен" : "ошибка")} · {target.Duration.TotalMilliseconds:F0} мс · {target.Detail}",
+                stack.Children.Add(Text($"{target.Name}: {(target.Passed ? "HTTPS-запрос успешен" : "ошибка проверки")} · {target.Duration.TotalMilliseconds:F0} мс · {target.Detail}",
                     12, color: target.Passed ? GoodBrush : WarnBrush));
         }
         else stack.Children.Add(Text("Соединение ещё не проверялось", 12, color: MutedBrush));
@@ -31,7 +32,14 @@ public sealed partial class MainWindow
     {
         var stack = new StackPanel { Spacing = 10 };
         stack.Children.Add(Text("Резервные копии и перенос данных", 17, FontWeight.SemiBold));
-        stack.Children.Add(Text("Настройки, списки, фильтры и payload. Перед импортом и откатом создаётся копия текущих данных. Остановите Zapret и службу.", 12, color: MutedBrush));
+        stack.Children.Add(Text("Копии сохраняют настройки, списки, фильтры и payload. Автоматически сохраняются только отличающиеся состояния перед важными изменениями — до 10 новых автокопий. Ручные и прежние архивы сохраняются. Обычное сохранение настроек копию не создаёт.", 12, color: MutedBrush));
+        CheckBox? recoveryConsent = null;
+        if (vm.RecoveryRequired)
+        {
+            stack.Children.Add(Text("IPSet требует восстановления. Выберите исправную копию или импортируйте ZIP. Будут восстановлены все данные выбранной копии; текущее состояние предварительно сохранится. До завершения запуск Zapret заблокирован.", 13, color: WarnBrush));
+            recoveryConsent = Check("Подтверждаю восстановление данных из выбранной копии", false);
+            stack.Children.Add(recoveryConsent);
+        }
         var row = new WrapPanel { Orientation = Orientation.Horizontal };
         AddFeatureAction(row, "Создать копию", vm.CreateBackupAsync);
         AddFeatureAction(row, "Экспорт ZIP", async () =>
@@ -50,6 +58,8 @@ public sealed partial class MainWindow
         });
         AddFeatureAction(row, "Импорт ZIP", async () =>
         {
+            if (vm.RecoveryRequired && recoveryConsent?.IsChecked != true)
+            { vm.ReportError("Восстановление не подтверждено", new InvalidOperationException("Отметьте подтверждение восстановления из выбранной копии.")); return; }
             try
             {
                 var files = await StorageProvider.OpenFilePickerAsync(new FilePickerOpenOptions
@@ -66,13 +76,17 @@ public sealed partial class MainWindow
         });
         stack.Children.Add(row);
         var chooser = Dropdown(vm.Backups, vm.Backups.FirstOrDefault(), 570);
+        chooser.Width = double.NaN;
+        chooser.HorizontalAlignment = HorizontalAlignment.Stretch;
         chooser.ItemTemplate = new FuncDataTemplate<UserDataBackupInfo>((backup, _) =>
-            Text(backup is null ? "Резервных копий пока нет" : $"{backup.CreatedAt.ToLocalTime():g} · {backup.Reason} · {backup.SizeBytes / 1024:N0} КБ", 12));
+            Text(backup is null ? "Резервных копий пока нет" : $"{backup.CreatedAt.ToLocalTime():g} · {backup.Reason} · {backup.SizeBytes / 1024d:N1} КБ", 12));
         stack.Children.Add(chooser);
         stack.Children.Add(Button("Восстановить выбранную копию", async () =>
         {
             if (chooser.SelectedItem is UserDataBackupInfo backup)
             {
+                if (vm.RecoveryRequired && recoveryConsent?.IsChecked != true)
+                { vm.ReportError("Восстановление не подтверждено", new InvalidOperationException("Отметьте подтверждение восстановления из выбранной копии.")); return; }
                 await vm.RestoreBackupAsync(backup.Id);
                 ApplyTheme();
                 if (currentPage == "Настройки") Show("Настройки");
@@ -87,6 +101,11 @@ public sealed partial class MainWindow
         var stack = new StackPanel { Spacing = 10 };
         stack.Children.Add(Text("Установка обновлений", 17, FontWeight.SemiBold));
         stack.Children.Add(Text("Сначала загрузите и проверьте обновление, затем установите его. Пользовательские данные сохраняются; предыдущий zapret доступен для отката.", 12, color: MutedBrush));
+        if (vm.PreparingData)
+        {
+            stack.Children.Add(Text(vm.PreparationMessage, 13, color: WarnBrush));
+            stack.Children.Add(Button("Отменить подготовку", () => { vm.CancelPreparation(); return Task.CompletedTask; }));
+        }
         var row = new WrapPanel { Orientation = Orientation.Horizontal };
         AddFeatureAction(row, "Загрузить zapret", vm.PrepareDistributionUpdateAsync);
         if (vm.DistributionUpdatePlan is { } distributionPlan)
@@ -122,29 +141,38 @@ public sealed partial class MainWindow
         }
         stack.Children.Add(data);
         stack.Children.Add(Text("Адреса YouTube и Discord (hosts)", 15, FontWeight.SemiBold));
-        stack.Children.Add(Text("hosts позволяет задать адреса сайтов вручную, вместо получения через DNS. Здесь можно добавить записи из проекта zapret. Это отдельная настройка Windows, а не исправление всех замечаний диагностики.", 12, color: MutedBrush));
+        stack.Children.Add(Text("hosts — таблица адресов сайтов в Windows. Обычно адреса запрашиваются через DNS; записи hosts задают их напрямую. Здесь можно обновить блок адресов из проекта zapret. Ваши остальные записи сохраняются. Сначала проверьте предложенные изменения.", 12, color: MutedBrush));
         var hostsActions = new WrapPanel();
         AddFeatureAction(hostsActions, "Показать изменения hosts", vm.PreviewHostsAsync);
         stack.Children.Add(hostsActions);
         if (vm.HostsPreview is { } hosts)
         {
-            stack.Children.Add(Text("Предпросмотр — файл ещё не изменён. Сравните вкладки и примените изменения, если хотите использовать эти адреса.", 12, color: MutedBrush));
-            stack.Children.Add(Text(hosts.Summary, 12));
+            stack.Children.Add(Text(hosts.HasChanges ? "Предпросмотр: файл Windows ещё не изменён." :
+                "Изменений нет. Эти адреса уже записаны в hosts; повторная запись и резервная копия не нужны.", 13,
+                color: hosts.HasChanges ? TextBrush : GoodBrush));
+            if (hosts.HasChanges)
+                stack.Children.Add(Text(hosts.AddedCount == 0 && hosts.RemovedCount == 0
+                    ? "Адреса те же; изменится текст служебного блока. Остальные строки сохранятся."
+                    : $"Сопоставлений добавится: {hosts.AddedCount}. Удалится: {hosts.RemovedCount}. Остальные записи сохранятся.", 13, color: MutedBrush));
             var tabs = new TabControl
             {
                 ItemsSource = new[]
                 {
-                    new TabItem { Header = "Текущий hosts", Content = ReportBox(hosts.CurrentContent) },
-                    new TabItem { Header = "Будет после применения", Content = ReportBox(hosts.ProposedContent) }
+                    new TabItem { Header = Text("Сейчас", 13), Content = ReportBox(hosts.CurrentContent) },
+                    new TabItem { Header = Text("После изменения", 13), Content = ReportBox(hosts.ProposedContent) }
                 }
             };
-            stack.Children.Add(tabs);
-            stack.Children.Add(Text("Для применения нужны права администратора. Сначала остановите Zapret и службу; текущий файл будет сохранён в резервную копию.", 12, color: MutedBrush));
-            stack.Children.Add(Button("Применить изменения hosts", async () =>
+            stack.Children.Add(new Expander { Header = "Сравнить текст до и после", Content = tabs,
+                HorizontalAlignment = HorizontalAlignment.Stretch });
+            if (hosts.HasChanges)
+                stack.Children.Add(Text("Для применения остановите Zapret и службу. Исходный hosts будет сохранён отдельно перед записью; нужны права администратора.", 12, color: MutedBrush));
+            var apply = EngineButton("Применить изменения hosts", async () =>
             {
                 await vm.ApplyHostsAsync();
                 if (currentPage == "Настройки") Show("Настройки");
-            }, primary: true));
+            }, () => hosts.HasChanges && !vm.PreparingData && !vm.TestingStrategies, primary: true);
+            if (!hosts.HasChanges) ToolTip.SetTip(apply, "Изменений нет — применять нечего");
+            stack.Children.Add(apply);
         }
         if (vm.HostsUpdateResult is { } result)
         {
@@ -172,6 +200,8 @@ public sealed partial class MainWindow
         var stack = new StackPanel { Spacing = 8 };
         stack.Children.Add(Text("История автоподбора", 16, FontWeight.SemiBold));
         var chooser = Dropdown(vm.TestHistory, vm.TestHistory.FirstOrDefault(), 620);
+        chooser.Width = double.NaN;
+        chooser.HorizontalAlignment = HorizontalAlignment.Stretch;
         chooser.ItemTemplate = new FuncDataTemplate<StrategyHistoryEntry>((entry, _) => Text(
             entry is null ? "История пока пуста" : $"{entry.CreatedAt.ToLocalTime():g} · {(entry.Cancelled ? "прерван" : "завершён")} · {entry.BestStrategy ?? "без рекомендации"}", 12));
         stack.Children.Add(chooser);
@@ -215,11 +245,11 @@ public sealed partial class MainWindow
     };
     private void AddFeatureAction(Panel row, string label, Func<Task> action, string section = "Настройки")
     {
-        var button = Button(label, async () =>
+        var button = EngineButton(label, async () =>
         {
             await action();
             if (currentPage == section) Show(section);
-        });
+        }, () => !vm.PreparingData && !vm.TestingStrategies);
         button.Margin = new Thickness(0, 0, 8, 8);
         row.Children.Add(button);
     }

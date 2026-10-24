@@ -6,6 +6,43 @@ namespace Zapret.Desktop.Tests;
 public sealed class FeatureTests
 {
     [Fact]
+    public async Task DistributionApplyAndRollbackPreserveBothUnsavedDraftBlocks()
+    {
+        using var app = new TestApplication(managedUpdates: new MemoryUpdates());
+        await app.ViewModel.InitializeAsync();
+        await app.ViewModel.PrepareDistributionUpdateAsync();
+        app.ViewModel.Draft.TcpPorts = "4000";
+        app.ViewModel.Draft.StartZapretOnLaunch = true;
+        await app.ViewModel.ApplyDistributionUpdateAsync();
+        Assert.NotNull(app.ViewModel.LastDistributionUpdate);
+        AssertDraft();
+        await app.ViewModel.RollbackDistributionUpdateAsync();
+        Assert.Null(app.ViewModel.LastDistributionUpdate);
+        AssertDraft();
+        void AssertDraft()
+        {
+            Assert.Equal("4000", app.ViewModel.Draft.TcpPorts);
+            Assert.True(app.ViewModel.Draft.StartZapretOnLaunch);
+            Assert.False(app.ViewModel.Settings.StartZapretOnLaunch);
+        }
+    }
+
+    private sealed class MemoryUpdates : IManagedUpdateService
+    {
+        public Task<ManagedUpdatePlan> PrepareDistributionAsync(CancellationToken cancellationToken = default) =>
+            Task.FromResult(new ManagedUpdatePlan("test", ManagedUpdateProduct.Distribution, "test", "", "", 0, "", 0, "", "test"));
+        public Task<ManagedUpdateResult> ApplyDistributionAsync(ManagedUpdatePlan plan, CancellationToken cancellationToken = default) =>
+            Task.FromResult(new ManagedUpdateResult("test", "test", "", "", "test"));
+        public Task RollbackDistributionAsync(ManagedUpdateResult result, CancellationToken cancellationToken = default) => Task.CompletedTask;
+        public Task<ManagedUpdatePlan> PrepareDesktopAsync(string localVersion, CancellationToken cancellationToken = default) => throw new NotSupportedException();
+        public Task<DesktopUpdateSchedule> ScheduleDesktopUpdateAsync(ManagedUpdatePlan plan, int currentProcessId, CancellationToken cancellationToken = default) => throw new NotSupportedException();
+        public Task<IpSetUpdatePlan> PrepareIpSetAsync(CancellationToken cancellationToken = default) => throw new NotSupportedException();
+        public Task<DataUpdateResult> ApplyIpSetAsync(IpSetUpdatePlan plan, CancellationToken cancellationToken = default) => throw new NotSupportedException();
+        public Task<HostsUpdatePreview> PreviewHostsAsync(CancellationToken cancellationToken = default) => throw new NotSupportedException();
+        public Task<DataUpdateResult> ApplyHostsAsync(HostsUpdatePreview preview, CancellationToken cancellationToken = default) => throw new NotSupportedException();
+    }
+
+    [Fact]
     public async Task ManualConnectionCheckCannotPublishResultsDuringAnEngineMutation()
     {
         var health = new DelayedHealth();

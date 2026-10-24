@@ -73,6 +73,17 @@ public sealed class LifecycleTests
     }
 
     [Fact]
+    public async Task MissingIpSetBackupStillAllowsExitAfterStoppingOwnedProcess()
+    {
+        using var app = new TestApplication();
+        await app.ViewModel.StartAsync();
+        app.Tester.RecoveryError = new InterruptedTestRecoveryException("Test backup is missing");
+        Assert.True(await app.ViewModel.StopOwnedForExitAsync());
+        Assert.Equal(ZapretRunState.Stopped, (await app.Process.GetStatusAsync(TestContext.Current.CancellationToken)).State);
+        Assert.NotNull(app.Tester.RecoveryError);
+    }
+
+    [Fact]
     public async Task ExitStaysOpenWhenInterruptedTestRecoveryFails()
     {
         using var app = new TestApplication();
@@ -199,7 +210,8 @@ internal sealed class TestApplication : IDisposable
     public string HostsPath => Path.Combine(workspace, "hosts");
 
     public TestApplication(IDiagnosticService? diagnostics = null, IConnectionHealthService? connection = null,
-        bool featureServices = false, IPayloadRecoveryService? payloadRecovery = null, HttpClient? updateClient = null)
+        bool featureServices = false, IPayloadRecoveryService? payloadRecovery = null, HttpClient? updateClient = null,
+        IUpdateService? updateService = null, IStrategyTester? strategyTester = null, IManagedUpdateService? managedUpdates = null)
     {
         Distribution = new(Path.Combine(workspace, "zapret"));
         Directory.CreateDirectory(Distribution.ListsDirectory);
@@ -212,12 +224,12 @@ internal sealed class TestApplication : IDisposable
         Settings = new(Path.Combine(workspace, "data", "settings.json"));
         Process = new(Service, Distribution);
         ViewModel = new(Distribution, Strategies, Process, Service, new FilterService(Distribution),
-            diagnostics!, new ListService(Distribution), null!, Tester, Settings, new TestStartupService(),
+            diagnostics!, new ListService(Distribution), updateService!, strategyTester ?? Tester, Settings, new TestStartupService(),
             new FakePayloadService(Distribution, Path.Combine(workspace, "data")), new TestPrivilegeService(), NullLogger<MainViewModel>.Instance,
             backups: featureServices ? new UserDataBackupService(Distribution, Settings, Path.Combine(workspace, "data")) : null,
             payloadRecovery: payloadRecovery ?? (featureServices ? new PayloadRecoveryService(Distribution, Path.Combine(workspace, "data")) : null),
-            managedUpdates: updateClient is null ? null : new ManagedUpdateService(Distribution, updateClient,
-                Path.Combine(workspace, "application"), Path.Combine(workspace, "stage"), HostsPath),
+            managedUpdates: managedUpdates ?? (updateClient is null ? null : new ManagedUpdateService(Distribution, updateClient,
+                Path.Combine(workspace, "application"), Path.Combine(workspace, "stage"), HostsPath)),
             connection: connection,
             history: featureServices ? new StrategyHistoryService(Distribution, Path.Combine(workspace, "data")) : null);
         var initialFile = Path.Combine(Distribution.Root, "general.bat");
@@ -293,6 +305,7 @@ internal sealed class TestProcessManager(TestServiceManager service, IZapretDist
     public Func<Task>? BeforeStop { get; set; }
     public int StopCalls { get; private set; }
     public int StartCalls { get; private set; }
+    public ZapretStrategy? StartedStrategy { get; private set; }
     public string? IpSetAtStart { get; private set; }
     public event Action<string, string>? OutputReceived { add { } remove { } }
     public Task<ZapretStatus> GetStatusAsync(CancellationToken cancellationToken = default) => Task.FromResult(new ZapretStatus(
@@ -301,6 +314,7 @@ internal sealed class TestProcessManager(TestServiceManager service, IZapretDist
     public async Task<ZapretStatus> StartAsync(ZapretStrategy strategy, CancellationToken cancellationToken = default)
     {
         StartCalls++;
+        StartedStrategy = strategy;
         NormalState = ZapretRunState.Running;
         IpSetAtStart = await File.ReadAllTextAsync(Path.Combine(distribution.ListsDirectory, "ipset-all.txt"), cancellationToken);
         return await GetStatusAsync(cancellationToken);

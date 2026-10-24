@@ -11,6 +11,7 @@ using Avalonia.Media;
 using Avalonia.Platform.Storage;
 using Avalonia.Styling;
 using Avalonia.Threading;
+using Avalonia.VisualTree;
 using Zapret.Core;
 
 namespace Zapret.Desktop;
@@ -18,18 +19,22 @@ namespace Zapret.Desktop;
 public sealed partial class MainWindow : Window
 {
     private readonly MainViewModel vm;
+    private readonly Action<Uri> openReleasePage;
     private readonly DispatcherTimer statusTimer = new() { Interval = TimeSpan.FromSeconds(5) };
     private readonly DispatcherTimer feedbackTimer = new() { Interval = TimeSpan.FromSeconds(8) };
     private readonly StackPanel page = new() { Spacing = 18 };
     private readonly Dictionary<string, Button> navButtons = [];
     private readonly List<(Button Button, Func<bool> CanExecute)> engineControls = [];
     private TextBlock footer = new();
+    private Grid feedbackPanel = new();
     private TextBlock sidebarStatus = new();
     private TextBlock? upstreamUpdateStatus;
     private TextBlock? desktopUpdateStatus;
     private TextBlock? updateNotice;
     private Border? updateNoticePanel;
     private Button? updateCheckButton;
+    private Button? upstreamReleaseButton;
+    private Button? desktopReleaseButton;
     private readonly Dictionary<string, TextBlock> strategyResultLabels = new(StringComparer.OrdinalIgnoreCase);
     private Border? strategySummaryPanel;
     private TextBlock? strategySummaryText;
@@ -58,15 +63,16 @@ public sealed partial class MainWindow : Window
     private IBrush OutlineBrush => Brush(IsLight ? "#E4E5EC" : "#303139");
     private IBrush TextBrush => Brush(IsLight ? "#16171C" : "#F5F5F8");
     private IBrush MutedBrush => Brush(IsLight ? "#60636F" : "#A3A5AF");
-    private static IBrush AccentBrush => Brush("#8B6CF6");
-    private static IBrush GoodBrush => Brush("#47C98A");
-    private static IBrush WarnBrush => Brush("#F3C96C");
-    private static IBrush BadBrush => Brush("#F07479");
+    private static IBrush AccentBrush => Brush("#6544C8");
+    private IBrush GoodBrush => Brush(IsLight ? "#147346" : "#47C98A");
+    private IBrush WarnBrush => Brush(IsLight ? "#835C00" : "#F3C96C");
+    private IBrush BadBrush => Brush(IsLight ? "#B42332" : "#F07479");
     private static IBrush Brush(string hex) => new SolidColorBrush(Color.Parse(hex));
 
-    public MainWindow(MainViewModel vm)
+    public MainWindow(MainViewModel vm, Action<Uri>? openReleasePage = null)
     {
         this.vm = vm;
+        this.openReleasePage = openReleasePage ?? (uri => Process.Start(new ProcessStartInfo(uri.AbsoluteUri) { UseShellExecute = true }));
         Title = "Zapret Desktop";
         using (var iconStream = Avalonia.Platform.AssetLoader.Open(new Uri("avares://Zapret.Desktop/Assets/app.ico")))
             Icon = new WindowIcon(iconStream);
@@ -86,10 +92,10 @@ public sealed partial class MainWindow : Window
             catch (Exception ex) { vm.Log("ERROR", ex.ToString()); }
             ApplyTheme();
             statusTimer.Start();
-            if (vm.Settings.CheckUpdates) await CheckAndOpenUpdatesAsync();
+            if (vm.Settings.CheckUpdates) await CheckForUpdatesAsync();
         };
         statusTimer.Tick += async (_, _) => await vm.RefreshAsync();
-        feedbackTimer.Tick += (_, _) => { feedbackTimer.Stop(); footer.IsVisible = false; };
+        feedbackTimer.Tick += (_, _) => { feedbackTimer.Stop(); feedbackPanel.IsVisible = false; };
         Closed += (_, _) => { statusTimer.Stop(); feedbackTimer.Stop(); };
         Closing += (_, e) =>
         {
@@ -134,16 +140,22 @@ public sealed partial class MainWindow : Window
     private void OnViewModelChanged(object? sender, PropertyChangedEventArgs e) =>
         Dispatcher.UIThread.Post(() =>
         {
-            if (e.PropertyName == nameof(MainViewModel.Message))
+            RefreshButtonActivity();
+            if (e.PropertyName == nameof(MainViewModel.FeedbackVersion))
             {
                 footer.Text = vm.Message;
-                footer.IsVisible = !string.IsNullOrWhiteSpace(vm.Message);
+                footer.Foreground = vm.MessageIsError ? BadBrush : MutedBrush;
+                feedbackPanel.IsVisible = !string.IsNullOrWhiteSpace(vm.Message);
                 feedbackTimer.Stop();
-                if (footer.IsVisible) feedbackTimer.Start();
+                if (feedbackPanel.IsVisible && !vm.MessageIsError) feedbackTimer.Start();
             }
             sidebarStatus.Text = vm.StatusText;
             sidebarStatusDot.Background = CurrentStatusBrush();
             if (e.PropertyName == nameof(MainViewModel.Busy)) RefreshEngineControls();
+            if (e.PropertyName == nameof(MainViewModel.PreparingData) && currentPage == "Настройки") Show(currentPage);
+            if (e.PropertyName == nameof(MainViewModel.FiltersNeedRestart) && currentPage == "Настройки") Show(currentPage);
+            if (e.PropertyName == nameof(MainViewModel.TestingStrategies) && currentPage is "Списки" or "Диагностика") Show(currentPage);
+            if (e.PropertyName == nameof(MainViewModel.RecoveryRequired) && currentPage is "Настройки" or "Главная") Show(currentPage);
             if (e.PropertyName is nameof(MainViewModel.UpstreamUpdate) or nameof(MainViewModel.DesktopUpdate)
                 or nameof(MainViewModel.CheckingUpdates) or nameof(MainViewModel.UpdateError))
                 RefreshUpdateDisplay();
@@ -223,12 +235,21 @@ public sealed partial class MainWindow : Window
         main.Children.Add(contentHost);
         footer = new TextBlock
         {
-            Text = vm.Message, IsVisible = false,
-            Foreground = MutedBrush, FontSize = 13,
-            Margin = new Thickness(30, 8, 30, 18), TextTrimming = TextTrimming.CharacterEllipsis
+            Text = vm.Message, TextWrapping = TextWrapping.Wrap,
+            Foreground = vm.MessageIsError ? BadBrush : MutedBrush, FontSize = 13,
+            VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 0, 12, 0)
         };
-        Grid.SetRow(footer, 1);
-        main.Children.Add(footer);
+        feedbackPanel = new Grid
+        {
+            ColumnDefinitions = new ColumnDefinitions("*,Auto"),
+            Margin = new Thickness(30, 8, 30, 18), IsVisible = !string.IsNullOrWhiteSpace(vm.Message)
+        };
+        var dismiss = MessageDismissButton();
+        Grid.SetColumn(dismiss, 1);
+        feedbackPanel.Children.Add(footer);
+        feedbackPanel.Children.Add(dismiss);
+        Grid.SetRow(feedbackPanel, 1);
+        main.Children.Add(feedbackPanel);
         Grid.SetColumn(main, 1);
         grid.Children.Add(main);
         Content = grid;
@@ -273,6 +294,7 @@ public sealed partial class MainWindow : Window
         DetachPage();
         page.Children.Clear();
         engineControls.Clear();
+        actionButtons.Clear();
         contentScroll.Content = page;
         contentHost.Content = contentScroll;
         UpdateNavigation();
@@ -292,23 +314,32 @@ public sealed partial class MainWindow : Window
         contentScroll.Offset = offset;
     }
 
-    private async Task CheckAndOpenUpdatesAsync()
+    private async Task CheckForUpdatesAsync()
     {
         if (vm.CheckingUpdates) return;
         await vm.CheckUpdatesAsync();
-        foreach (var update in new[] { vm.UpstreamUpdate, vm.DesktopUpdate })
+    }
+
+    private Task OpenReleaseAsync(UpdateInfo? update, string repository)
+    {
+        if (update is null) return Task.CompletedTask;
+        if (!Uri.TryCreate(update.ReleaseUrl, UriKind.Absolute, out var url) || url.Scheme != Uri.UriSchemeHttps ||
+            url.Host != "github.com" || url.Port != 443 || url.UserInfo.Length != 0 ||
+            !url.AbsolutePath.StartsWith($"/{repository}/releases/", StringComparison.Ordinal))
         {
-            if (update?.Available != true || !Uri.TryCreate(update.ReleaseUrl, UriKind.Absolute, out var url) ||
-                url.Scheme != Uri.UriSchemeHttps || url.Host != "github.com" ||
-                !url.AbsolutePath.Contains("/releases/", StringComparison.OrdinalIgnoreCase)) continue;
-            try { Process.Start(new ProcessStartInfo(url.AbsoluteUri) { UseShellExecute = true }); }
-            catch (Exception ex) { vm.Log("ERROR", $"Не удалось открыть страницу выпуска {update.Product}: {ex.Message}"); }
+            vm.ReportError("Не удалось открыть выпуск", new InvalidOperationException("Недоверенный адрес выпуска."));
+            return Task.CompletedTask;
         }
+        try { openReleasePage(url); }
+        catch (Exception ex) { vm.ReportError("Не удалось открыть страницу выпуска", ex); }
+        return Task.CompletedTask;
     }
 
     private void RefreshUpdateDisplay()
     {
         if (updateCheckButton is not null) updateCheckButton.IsEnabled = !vm.CheckingUpdates;
+        if (upstreamReleaseButton is not null) upstreamReleaseButton.IsVisible = vm.UpstreamUpdate is not null;
+        if (desktopReleaseButton is not null) desktopReleaseButton.IsVisible = vm.DesktopUpdate is not null;
         if (upstreamUpdateStatus is not null)
         {
             upstreamUpdateStatus.Text = UpdateStatus("zapret", vm.UpstreamUpdate);
@@ -384,10 +415,10 @@ public sealed partial class MainWindow : Window
         Child = Text(label, 12, FontWeight.SemiBold, color)
     };
     private Button EngineButton(string label, Func<Task> action, Func<bool>? canExecute = null,
-        bool primary = false, bool danger = false)
+        bool primary = false, bool danger = false, string? activityKey = null, Func<bool>? isLoading = null)
     {
         canExecute ??= () => true;
-        var button = Button(label, action, primary, danger);
+        var button = Button(label, action, primary, danger, activityKey, isLoading);
         engineControls.Add((button, canExecute));
         button.IsEnabled = !vm.Busy && canExecute();
         return button;
@@ -397,9 +428,10 @@ public sealed partial class MainWindow : Window
         foreach (var (button, canExecute) in engineControls)
             button.IsEnabled = !vm.Busy && canExecute();
     }
-    private Button Button(string label, Func<Task> action, bool primary = false, bool danger = false)
+    private Button Button(string label, Func<Task> action, bool primary = false, bool danger = false,
+        string? activityKey = null, Func<bool>? isLoading = null)
     {
-        var button = new Button
+        var button = new ActionButton
         {
             Content = label, MinHeight = 40, Padding = new Thickness(15, 8),
             HorizontalContentAlignment = HorizontalAlignment.Center,
@@ -409,7 +441,7 @@ public sealed partial class MainWindow : Window
             BorderThickness = new Thickness(0), CornerRadius = new CornerRadius(8),
             FontSize = 14, FontWeight = FontWeight.SemiBold
         };
-        button.Click += async (_, _) => await action();
+        TrackButton(button, activityKey ?? currentPage + ":" + label, action, isLoading);
         return button;
     }
     private ComboBox StrategyPicker()
@@ -417,7 +449,13 @@ public sealed partial class MainWindow : Window
         var combo = Dropdown(vm.Strategies, vm.SelectedStrategy, 260);
         combo.ItemTemplate = new FuncDataTemplate<ZapretStrategy>((item, _) =>
             Text(item?.DisplayName ?? "Выберите стратегию", 14));
-        combo.SelectionChanged += async (_, _) => await vm.SelectAsync(combo.SelectedItem as ZapretStrategy);
+        combo.SelectionChanged += async (_, _) =>
+        {
+            // Resetting ItemsSource during import/update is not a user selection.
+            if (combo.SelectedItem is ZapretStrategy selected && vm.Strategies.Contains(selected) &&
+                combo.IsAttachedToVisualTree())
+                await vm.SelectAsync(selected);
+        };
         return combo;
     }
     private ComboBox Dropdown(IEnumerable items, object? selected, double width) => new()

@@ -9,10 +9,10 @@
     <Setter Property="FontSize" Value="14" />
   </Style>
   <Style Selector="ComboBox:pointerover">
-    <Setter Property="BorderBrush" Value="#8B6CF6" />
+    <Setter Property="BorderBrush" Value="#6544C8" />
   </Style>
   <Style Selector="ComboBox:focus">
-    <Setter Property="BorderBrush" Value="#8B6CF6" />
+    <Setter Property="BorderBrush" Value="#6544C8" />
   </Style>
   <Style Selector="ComboBox /template/ Popup#PART_Popup">
     <Setter Property="MaxHeight" Value="360" />
@@ -28,7 +28,7 @@
     <Setter Property="Foreground" Value="White" />
   </Style>
   <Style Selector="ComboBoxItem:selected">
-    <Setter Property="Background" Value="#8B6CF6" />
+    <Setter Property="Background" Value="#6544C8" />
     <Setter Property="Foreground" Value="White" />
   </Style>
 </Styles>

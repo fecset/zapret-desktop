@@ -30,6 +30,7 @@ public sealed partial class MainViewModel
     public string RunningStrategyName => Status?.StrategyId is { } id
         ? Strategies.FirstOrDefault(item => item.Id.Equals(id, StringComparison.OrdinalIgnoreCase))?.DisplayName ?? id
         : "Не определена";
+    public bool CheckingConnection => connectionCancellation is not null;
 
     private async Task LoadFeatureDataAsync()
     {
@@ -52,8 +53,15 @@ public sealed partial class MainViewModel
     private async Task BackupBeforeChangeAsync(string reason)
     {
         if (backups is null) return;
-        var backup = await backups.CreateAsync(reason);
-        Backups.Insert(0, backup);
+        await backups.CreateAutomaticAsync(reason);
+        await ReloadBackupsAsync();
+    }
+    private async Task ReloadBackupsAsync()
+    {
+        if (backups is null) return;
+        var items = await backups.GetBackupsAsync();
+        Backups.Clear();
+        foreach (var item in items) Backups.Add(item);
     }
     private async Task SaveTestHistoryAsync(StrategyTestResult result)
     {
@@ -61,9 +69,10 @@ public sealed partial class MainViewModel
         try { TestHistory.Insert(0, await history.SaveAsync(result, strategyChecks.Values.ToArray())); }
         catch (Exception ex) { Log("WARN", "Не удалось сохранить историю автоподбора: " + ex.Message); }
     }
-    private async Task RequireStoppedForFilesAsync(bool unloadDriver = false)
+    private async Task RequireStoppedForFilesAsync(bool unloadDriver = false, bool allowRecovery = false)
     {
-        await tester.RecoverInterruptedTestAsync();
+        try { await tester.RecoverInterruptedTestAsync(); }
+        catch (InterruptedTestRecoveryException) when (allowRecovery) { RecoveryRequired = true; }
         Status = await process.GetStatusAsync();
         var serviceState = await service.GetStatusAsync();
         if (Status.State != ZapretRunState.Stopped || serviceState is not ("Stopped" or "NotInstalled"))
@@ -74,7 +83,8 @@ public sealed partial class MainViewModel
     public Task CreateBackupAsync() => RunAsync(async () =>
     {
         await RequireStoppedForFilesAsync();
-        await BackupBeforeChangeAsync("Ручная резервная копия");
+        await Required(backups).CreateAsync("Ручная резервная копия");
+        await ReloadBackupsAsync();
         Message = "Резервная копия создана";
     });
     public Task ExportUserDataAsync(Stream destination) => RunAsync(async () =>
@@ -85,19 +95,21 @@ public sealed partial class MainViewModel
     });
     public Task ImportUserDataAsync(Stream source) => RunAsync(async () =>
     {
-        await RequireStoppedForFilesAsync();
+        await RequireStoppedForFilesAsync(allowRecovery: true);
         await Required(backups).ImportAsync(source);
-        await ReloadUserDataAsync();
+        await ConfirmRecoveryAsync();
+        await ReloadUserDataAsync(resetDraft: true);
         Message = "Данные импортированы; предыдущая версия сохранена в резервной копии";
     });
     public Task RestoreBackupAsync(string id) => RunAsync(async () =>
     {
-        await RequireStoppedForFilesAsync();
+        await RequireStoppedForFilesAsync(allowRecovery: true);
         await Required(backups).RestoreAsync(id);
-        await ReloadUserDataAsync();
+        await ConfirmRecoveryAsync();
+        await ReloadUserDataAsync(resetDraft: true);
         Message = "Резервная копия восстановлена";
     });
-    private async Task ReloadUserDataAsync()
+    private async Task ReloadUserDataAsync(bool resetDraft = false)
     {
         settings = await settingsStore.LoadAsync();
         // Importing a file never enables elevated startup as a side effect.
@@ -106,6 +118,8 @@ public sealed partial class MainViewModel
         await ReloadStrategiesAsync();
         Game = await filters.GetGameFilterAsync();
         IpSet = await filters.GetIpSetModeAsync();
+        if (resetDraft) Draft.Load(settings, Game, IpSet);
+        FiltersNeedRestart = false;
         OnPropertyChanged(nameof(ListFiles));
         OnPropertyChanged(nameof(FakePayloads));
         await LoadFeatureDataAsync();
@@ -148,6 +162,7 @@ public sealed partial class MainViewModel
         connectionVersion++;
         var previous = connectionCancellation;
         connectionCancellation = null;
+        OnPropertyChanged(nameof(CheckingConnection));
         previous?.Cancel();
     }
     private async Task<bool> CheckConnectionCoreAsync()
@@ -156,6 +171,7 @@ public sealed partial class MainViewModel
         if (connection is null || exitRequested) return false;
         using var cancellation = new CancellationTokenSource();
         connectionCancellation = cancellation;
+        OnPropertyChanged(nameof(CheckingConnection));
         try
         {
             var result = await connection.CheckAsync(cancellation.Token)
@@ -168,7 +184,11 @@ public sealed partial class MainViewModel
         catch (Exception ex) { Log("WARN", "Не удалось проверить доступность сервисов: " + ex.Message); }
         finally
         {
-            if (connectionCancellation == cancellation) connectionCancellation = null;
+            if (connectionCancellation == cancellation)
+            {
+                connectionCancellation = null;
+                OnPropertyChanged(nameof(CheckingConnection));
+            }
         }
         return false;
     }
@@ -181,9 +201,9 @@ public sealed partial class MainViewModel
             ConnectionHealth = null;
             await action();
             completedVersion = connectionVersion;
-        }, skipIfBusy: true);
+        }, skipIfBusy: true, allowDuringPreparation: true);
         // Network latency must not hold the gate used by start, stop and strategy selection.
-        if (checkConnection && completedVersion == connectionVersion && !exitRequested)
+        if (checkConnection && settings.CheckConnectionAfterStart && completedVersion == connectionVersion && !exitRequested)
             await CheckConnectionCoreAsync();
     }
     public Task ShowHistoryAsync(string id) => RunAsync(async () =>
@@ -200,6 +220,8 @@ public sealed partial class MainViewModel
         Message = "Рекомендация сохранена для следующего запуска";
     });
     public Task ApplyAndRestartAsync() => RunEngineActionAsync(async () =>
+        await ApplyAndRestartCoreAsync());
+    private async Task ApplyAndRestartCoreAsync()
     {
         await tester.RecoverInterruptedTestAsync();
         if (SelectedStrategy is null) throw new InvalidOperationException("Выберите стратегию.");
@@ -213,11 +235,13 @@ public sealed partial class MainViewModel
             Status = await process.GetStatusAsync();
         }
         else Status = await process.RestartAsync(fresh);
+        FiltersNeedRestart = false;
         Message = "Выбранная стратегия и текущие фильтры применены";
-    });
-    public Task PrepareDistributionUpdateAsync() => RunAsync(async () =>
+    }
+    public Task PrepareDistributionUpdateAsync() => PrepareAsync("Загружаем и проверяем обновление zapret.",
+        token => Required(managedUpdates).PrepareDistributionAsync(token), plan =>
     {
-        DistributionUpdatePlan = await Required(managedUpdates).PrepareDistributionAsync();
+        DistributionUpdatePlan = plan;
         Message = "Обновление zapret загружено и проверено. Теперь его можно установить.";
     });
     public Task ApplyDistributionUpdateAsync() => RunAsync(async () =>
@@ -239,14 +263,15 @@ public sealed partial class MainViewModel
         await ReloadUserDataAsync();
         Message = "Предыдущая версия zapret восстановлена";
     });
-    public Task PrepareDesktopUpdateAsync() => RunAsync(async () =>
+    public Task PrepareDesktopUpdateAsync() => PrepareAsync("Загружаем и проверяем обновление Desktop.",
+        token => Required(managedUpdates).PrepareDesktopAsync(DesktopVersion, token), plan =>
     {
-        DesktopUpdatePlan = await Required(managedUpdates).PrepareDesktopAsync(DesktopVersion);
+        DesktopUpdatePlan = plan;
         Message = "Обновление Desktop загружено и проверено. Установка выполняется после выхода.";
     });
     public async Task<bool> InstallDesktopUpdateForExitAsync()
     {
-        if (DesktopUpdatePlan is null || Busy)
+        if (DesktopUpdatePlan is null || Busy || PreparingData)
         {
             Message = "Сначала загрузите обновление и дождитесь завершения текущей операции.";
             return false;
@@ -270,8 +295,8 @@ public sealed partial class MainViewModel
             return false;
         }
     }
-    public Task PrepareIpSetUpdateAsync() => RunAsync(async () =>
-        IpSetUpdatePlan = await Required(managedUpdates).PrepareIpSetAsync());
+    public Task PrepareIpSetUpdateAsync() => PrepareAsync("Загружаем список IP-адресов.",
+        token => Required(managedUpdates).PrepareIpSetAsync(token), plan => IpSetUpdatePlan = plan);
     public Task ApplyIpSetUpdateAsync() => RunAsync(async () =>
     {
         await RequireStoppedForFilesAsync();
@@ -282,21 +307,25 @@ public sealed partial class MainViewModel
         IpSet = await filters.GetIpSetModeAsync();
         Message = result.Summary;
     });
-    public Task PreviewHostsAsync() => RunAsync(async () =>
+    public Task PreviewHostsAsync() => PrepareAsync("Готовим предпросмотр hosts.",
+        token => Required(managedUpdates).PreviewHostsAsync(token), preview =>
     {
-        HostsPreview = await Required(managedUpdates).PreviewHostsAsync();
+        HostsPreview = preview;
         HostsUpdateResult = null;
-        Message = "Предпросмотр готов. Файл hosts ещё не изменён.";
+        Message = preview.HasChanges ? "Предпросмотр готов. Файл hosts ещё не изменён." : "Изменений нет: hosts уже содержит эти адреса.";
     });
     public Task ApplyHostsAsync() => RunAsync(async () =>
     {
-        await RequireStoppedForFilesAsync();
-        var result = await Required(managedUpdates).ApplyHostsAsync(
-            HostsPreview ?? throw new InvalidOperationException("Сначала просмотрите изменения hosts."));
+        var preview = HostsPreview ?? throw new InvalidOperationException("Сначала просмотрите изменения hosts.");
+        if (preview.HasChanges) await RequireStoppedForFilesAsync();
+        var result = await Required(managedUpdates).ApplyHostsAsync(preview);
         HostsPreview = null;
         HostsUpdateResult = result;
-        Message = result.Summary + " Обновляем диагностику...";
-        if (diagnostics is not null) await RefreshDiagnosticsCoreAsync();
+        if (result.Changed && diagnostics is not null)
+        {
+            Message = result.Summary + " Обновляем диагностику...";
+            await RefreshDiagnosticsCoreAsync();
+        }
         Message = result.Summary;
     });
     private static T Required<T>(T? instance) where T : class =>

@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Net;
 using System.Text.RegularExpressions;
 using Zapret.Core;
 
@@ -59,16 +60,19 @@ public sealed class PowerShellStrategyTester : IStrategyTester
             await runner.StandardInput.WriteLineAsync(value);
             await runner.StandardInput.FlushAsync();
         }
-        string? best = null;
         string? results = null;
         string? currentFile = null;
-        var completed = new CompletedStrategyTracker();
+        var expectingResult = false;
+        var completed = new Dictionary<string, StrategyCheckProgress>(StringComparer.OrdinalIgnoreCase);
+        string? BestCompleted() => completed.Values.OrderByDescending(check => check.HttpOk)
+            .ThenByDescending(check => check.PingOk).FirstOrDefault()?.FileName;
         try
         {
             while (await runner.StandardOutput.ReadLineAsync(cancellationToken) is { } line)
             {
                 if (line == "__ZD_STOP__")
                 {
+                    expectingResult = false;
                     try { await process.StopOwnedAsync(); }
                     catch (Exception ex) { progress.Report("[ERROR] Не удалось остановить winws: " + ex.Message); }
                     await ReplyAsync("OK");
@@ -78,12 +82,14 @@ public sealed class PowerShellStrategyTester : IStrategyTester
                 {
                     var fileName = line["__ZD_START__|".Length..];
                     currentFile = fileName;
+                    expectingResult = false;
                     strategyProgress.Report(new(fileName, StrategyCheckState.Running));
                     try
                     {
                         if (!available.TryGetValue(fileName, out var strategy))
                             throw new InvalidOperationException($"Стратегия {fileName} не найдена или не поддерживается.");
                         await process.StartAsync(strategy, cancellationToken);
+                        expectingResult = true;
                         await ReplyAsync("OK");
                     }
                     catch (Exception ex) when (ex is not OperationCanceledException)
@@ -97,30 +103,36 @@ public sealed class PowerShellStrategyTester : IStrategyTester
                 if (line.StartsWith("__ZD_RESULT__|", StringComparison.Ordinal))
                 {
                     var fields = line.Split('|');
-                    if (fields.Length == 7 && int.TryParse(fields[2], out var httpOk) &&
+                    if (fields.Length == 7 && expectingResult && string.Equals(currentFile, fields[1], StringComparison.OrdinalIgnoreCase) &&
+                        available.ContainsKey(fields[1]) && int.TryParse(fields[2], out var httpOk) &&
                         int.TryParse(fields[3], out var httpFailed) && int.TryParse(fields[4], out var unsupported) &&
-                        int.TryParse(fields[5], out var pingOk) && int.TryParse(fields[6], out var pingFailed))
-                        strategyProgress.Report(new(fields[1], StrategyCheckState.Completed,
-                            httpOk, httpFailed, unsupported, pingOk, pingFailed));
+                        int.TryParse(fields[5], out var pingOk) && int.TryParse(fields[6], out var pingFailed) &&
+                        httpOk >= 0 && httpFailed >= 0 && unsupported >= 0 && pingOk >= 0 && pingFailed >= 0)
+                    {
+                        var result = new StrategyCheckProgress(fields[1], StrategyCheckState.Completed,
+                            httpOk, httpFailed, unsupported, pingOk, pingFailed);
+                        expectingResult = false;
+                        if (completed.TryAdd(fields[1], result)) strategyProgress.Report(result);
+                    }
                     continue;
                 }
                 if (line.Contains("Strategy failed to start", StringComparison.OrdinalIgnoreCase) && currentFile is not null)
+                {
+                    expectingResult = false;
                     strategyProgress.Report(new(currentFile, StrategyCheckState.Failed));
+                }
                 progress.Report(line);
-                completed.Observe(line);
-                if (line.StartsWith("Best config: ", StringComparison.OrdinalIgnoreCase))
-                    best = string.IsNullOrWhiteSpace(line[13..]) ? null : line[13..].Trim();
                 if (line.StartsWith("Results saved to ", StringComparison.OrdinalIgnoreCase)) results = line[17..].Trim();
             }
             var error = await runner.StandardError.ReadToEndAsync(cancellationToken);
             if (error.Length > 0) progress.Report(error);
             await runner.WaitForExitAsync(cancellationToken);
             if (runner.ExitCode != 0) throw new InvalidOperationException($"Тестовый скрипт завершился с кодом {runner.ExitCode}: {error}");
-            return new(best ?? completed.BestStrategy, results ?? "");
+            return new(BestCompleted(), results ?? "");
         }
         catch (Exception ex) when (cancellationToken.IsCancellationRequested && ex is OperationCanceledException or IOException)
         {
-            return new(completed.BestStrategy, results ?? "", Cancelled: true);
+            return new(BestCompleted(), results ?? "", Cancelled: true);
         }
         finally
         {
@@ -142,11 +154,38 @@ public sealed class PowerShellStrategyTester : IStrategyTester
         var backup = Path.Combine(distribution.ListsDirectory, "ipset-all.test-backup.txt");
         var target = Path.Combine(distribution.ListsDirectory, "ipset-all.txt");
         if (!File.Exists(backup))
-            throw new IOException("Не удалось восстановить IPSet после теста: резервная копия отсутствует. Восстановите ipset-all.txt перед запуском Zapret.");
+            throw new InterruptedTestRecoveryException("Тестовая копия IPSet отсутствует. Откройте «Настройки → Резервные копии» и восстановите выбранную копию перед запуском Zapret.");
         SafePaths.RequireDirectFile(distribution.Root, backup);
         await AtomicFiles.WriteBytesAsync(target, await File.ReadAllBytesAsync(backup, cancellationToken), cancellationToken);
         File.Delete(flag);
         File.Delete(backup);
+    }
+
+    public async Task ConfirmRestoredIpSetAsync(CancellationToken cancellationToken = default)
+    {
+        if (activeRunner is not null) throw new InvalidOperationException("Сначала завершите тест стратегий.");
+        var flag = Path.Combine(distribution.Root, "ipset_switched.flag");
+        if (!File.Exists(flag)) return;
+        SafePaths.RequireDirectFile(distribution.Root, flag);
+        if (File.Exists(Path.Combine(distribution.ListsDirectory, "ipset-all.test-backup.txt")))
+            throw new InvalidOperationException("Тестовая копия снова доступна. Повторите автоматическое восстановление.");
+        var file = SafePaths.RequireDirectFile(distribution.Root, Path.Combine(distribution.ListsDirectory, "ipset-all.txt"));
+        if (new FileInfo(file).Length > 16 * 1024 * 1024) throw new InvalidDataException("Восстановленный IPSet слишком большой.");
+        var text = await File.ReadAllTextAsync(file, cancellationToken);
+        foreach (var line in text.Split('\n'))
+        {
+            var entry = line.Split('#', 2)[0].Trim().TrimStart('\uFEFF');
+            if (entry.Length == 0) continue;
+            var parts = entry.Split('/');
+            if (parts.Length > 2 || parts[0].Any(c => !(char.IsAsciiHexDigit(c) || c is '.' or ':')) ||
+                !IPAddress.TryParse(parts[0], out var address) ||
+                parts.Length == 2 && (!int.TryParse(parts[1], out var prefix) || prefix < 0 || prefix >
+                    (address.AddressFamily == System.Net.Sockets.AddressFamily.InterNetwork ? 32 : 128)))
+                throw new InvalidDataException("В выбранной копии некорректный IPSet. Выберите другую резервную копию.");
+        }
+        cancellationToken.ThrowIfCancellationRequested();
+        SafePaths.RequireDirectFile(distribution.Root, flag);
+        File.Delete(flag);
     }
 }
 

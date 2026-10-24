@@ -1,3 +1,5 @@
+using System.Net;
+
 namespace Zapret.Core;
 
 public enum ManagedUpdateProduct { Distribution, Desktop }
@@ -18,9 +20,35 @@ public sealed record IpSetUpdatePlan(string Id, string SourceUrl, string TargetP
 
 /// <summary>Only this proposed managed block is replaced; unrelated hosts entries are retained.</summary>
 public sealed record HostsUpdatePreview(string Id, string SourceUrl, string TargetPath,
-    string CurrentContent, string ProposedContent, int EntryCount, string Summary);
+    string CurrentContent, string ProposedContent, int EntryCount, string Summary)
+{
+    public bool HasChanges => !string.Equals(Normalize(CurrentContent), Normalize(ProposedContent), StringComparison.Ordinal);
+    public int AddedCount => CountDifference(ProposedContent, CurrentContent);
+    public int RemovedCount => CountDifference(CurrentContent, ProposedContent);
 
-public sealed record DataUpdateResult(string TargetPath, string? BackupPath, string Summary);
+    private static string Normalize(string content) => content.TrimStart('\uFEFF').ReplaceLineEndings("\n").TrimEnd('\n');
+
+    private static int CountDifference(string content, string previous)
+    {
+        var mappings = Mappings(content);
+        mappings.ExceptWith(Mappings(previous));
+        return mappings.Count;
+    }
+
+    private static HashSet<string> Mappings(string content)
+    {
+        var result = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var line in content.TrimStart('\uFEFF').ReplaceLineEndings("\n").Split('\n'))
+        {
+            var parts = line.Split('#', 2)[0].Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries);
+            if (parts.Length < 2 || !IPAddress.TryParse(parts[0], out var address)) continue;
+            foreach (var domain in parts.Skip(1)) result.Add(address + " " + domain);
+        }
+        return result;
+    }
+}
+
+public sealed record DataUpdateResult(string TargetPath, string? BackupPath, string Summary, bool Changed = true);
 
 /// <summary>The caller must stop winws, the service and strategy tests before applying an update.</summary>
 public interface IManagedUpdateService

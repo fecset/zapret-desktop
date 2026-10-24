@@ -21,6 +21,7 @@ public sealed partial class MainViewModel(IZapretDistribution distribution, IStr
     private GameFilterSettings game = new(GameFilterMode.Disabled, "1024-65535", "1024-65535");
     private IpSetMode ipset;
     private string message = "";
+    private long feedbackVersion;
     private readonly SemaphoreSlim operationGate = new(1, 1);
     private bool busy;
     private bool exitRequested;
@@ -59,6 +60,7 @@ public sealed partial class MainViewModel(IZapretDistribution distribution, IStr
     public string DistributionPath => distribution.Root;
     public bool IsAdministrator => privilege.IsAdministrator;
     public DesktopSettings Settings => settings;
+    public SettingsDraft Draft { get; } = new();
     public ZapretStrategy? SelectedStrategy
     {
         get => selectedStrategy;
@@ -71,11 +73,26 @@ public sealed partial class MainViewModel(IZapretDistribution distribution, IStr
         ZapretRunState.Running => "Активен",
         ZapretRunState.External => "Запущен вне приложения",
         ZapretRunState.ServiceRunning => "Служба активна",
-        _ => "Остановлен"
+        _ => Status?.ServiceStatus switch
+        {
+            "StartPending" => "Служба запускается", "StopPending" => "Служба останавливается",
+            "AccessDenied" or "Unknown" => "Состояние службы не подтверждено", _ => "Остановлен"
+        }
     };
     public GameFilterSettings Game { get => game; private set => SetProperty(ref game, value); }
     public IpSetMode IpSet { get => ipset; private set => SetProperty(ref ipset, value); }
-    public string Message { get => message; private set => SetProperty(ref message, value); }
+    public string Message
+    {
+        get => message;
+        private set
+        {
+            SetProperty(ref message, value);
+            feedbackVersion++;
+            OnPropertyChanged(nameof(FeedbackVersion));
+        }
+    }
+    public long FeedbackVersion => feedbackVersion;
+    public bool MessageIsError => Message.StartsWith("Ошибка:", StringComparison.Ordinal) || Message.StartsWith("Не удалось", StringComparison.Ordinal);
     public bool Busy { get => busy; private set => SetProperty(ref busy, value); }
     public bool ServiceAutoStart { get => serviceAutoStart; private set => SetProperty(ref serviceAutoStart, value); }
     public UpdateInfo? UpstreamUpdate { get => upstreamUpdate; private set => SetProperty(ref upstreamUpdate, value); }
@@ -102,6 +119,7 @@ public sealed partial class MainViewModel(IZapretDistribution distribution, IStr
         catch (Exception ex)
         {
             recovered = false;
+            if (ex is InterruptedTestRecoveryException) RecoveryRequired = true;
             Message = "Не удалось восстановить IPSet после теста: " + ex.Message;
             StartupWarnings.Add(Message);
             Log("ERROR", ex.ToString());
@@ -121,16 +139,18 @@ public sealed partial class MainViewModel(IZapretDistribution distribution, IStr
         foreach (var strategy in await strategies.GetStrategiesAsync()) Strategies.Add(strategy);
         SelectedStrategy = Strategies.FirstOrDefault(x => x.Id == settings.SelectedStrategyId) ?? Strategies.FirstOrDefault();
         await RefreshAsync();
+        Draft.Load(settings, Game, IpSet);
         await LoadFeatureDataAsync();
         if (recovered && settings.StartZapretOnLaunch && SelectedStrategy is not null && Status?.State == ZapretRunState.Stopped)
             await StartAsync();
     }
-    public Task RefreshAsync() => Busy ? Task.CompletedTask : RunAsync(async () =>
+    public Task RefreshAsync() => Busy || PreparingData ? Task.CompletedTask : RunAsync(async () =>
     {
         Status = await process.GetStatusAsync();
         ServiceAutoStart = await service.GetAutoStartAsync();
         Game = await filters.GetGameFilterAsync();
         IpSet = await filters.GetIpSetModeAsync();
+        if (Status.State == ZapretRunState.Stopped) FiltersNeedRestart = false;
     });
     public Task StartAsync() => RunEngineActionAsync(async () =>
     {
@@ -138,6 +158,7 @@ public sealed partial class MainViewModel(IZapretDistribution distribution, IStr
         if (SelectedStrategy is null) throw new InvalidOperationException("Выберите стратегию.");
         var fresh = (await strategies.GetStrategiesAsync()).First(x => x.Id == SelectedStrategy.Id);
         Status = await process.StartAsync(fresh);
+        FiltersNeedRestart = false;
         Log("INFO", $"Запущена стратегия {SelectedStrategy.Name}; PID {Status.ProcessId}");
         Message = "Стратегия запущена";
     });
@@ -152,29 +173,38 @@ public sealed partial class MainViewModel(IZapretDistribution distribution, IStr
         finally
         {
             Status = await process.GetStatusAsync();
-            if (Status.State == ZapretRunState.Stopped) ConnectionHealth = null;
+            if (Status.State == ZapretRunState.Stopped) { ConnectionHealth = null; FiltersNeedRestart = false; }
         }
     }, checkConnection: false);
-    public Task SelectAsync(ZapretStrategy? strategy) => RunAsync(async () =>
+    public Task<bool> SelectAsync(ZapretStrategy? strategy) => RunAsync(async () =>
     {
         SelectedStrategy = strategy;
         settings.SelectedStrategyId = strategy?.Id;
         await settingsStore.SaveAsync(settings);
         Message = "Стратегия по умолчанию сохранена";
-    });
+    }, allowDuringPreparation: true);
     public Task SetGameAsync(GameFilterMode mode, string tcp, string udp) => RunAsync(async () =>
     {
+        var value = new GameFilterSettings(mode, tcp, udp);
+        FilterRules.Validate(value, await filters.GetIpSetModeAsync());
+        if (value == await filters.GetGameFilterAsync()) { Message = "Game Filter не изменился"; return; }
         await BackupBeforeChangeAsync("Перед изменением Game Filter");
-        await filters.SetGameFilterAsync(new(mode, tcp, udp));
+        await filters.SetGameFilterAsync(value);
         Game = await filters.GetGameFilterAsync();
+        Draft.SetGame(Game);
+        await MarkChangedFiltersAsync();
         Message = "Game Filter изменён. Перезапустите активную стратегию.";
         Log("INFO", $"Game Filter: {mode}");
     });
     public Task SetIpSetAsync(IpSetMode mode) => RunAsync(async () =>
     {
+        FilterRules.Validate(await filters.GetGameFilterAsync(), mode);
+        if (mode == await filters.GetIpSetModeAsync()) { Message = "IPSet Filter не изменился"; return; }
         await BackupBeforeChangeAsync("Перед изменением IPSet Filter");
         await filters.SetIpSetModeAsync(mode);
         IpSet = await filters.GetIpSetModeAsync();
+        Draft.IpSetMode = IpSet;
+        await MarkChangedFiltersAsync();
         Message = "IPSet Filter изменён. Перезапустите активную стратегию.";
         Log("INFO", $"IPSet Filter: {mode}");
     });
@@ -210,6 +240,7 @@ public sealed partial class MainViewModel(IZapretDistribution distribution, IStr
         }
         Status = await process.GetStatusAsync();
         ServiceAutoStart = await service.GetAutoStartAsync();
+        if (action is "install" or "start" or "restart" || Status.State == ZapretRunState.Stopped) FiltersNeedRestart = false;
         Log("INFO", $"Служба: {action}");
         Message = action switch
         {
@@ -234,9 +265,15 @@ public sealed partial class MainViewModel(IZapretDistribution distribution, IStr
     }
     public Task SaveSettingsAsync() => RunAsync(async () =>
     {
-        await BackupBeforeChangeAsync("Перед сохранением настроек");
-        startup.SetEnabled(settings.StartWithWindows);
-        await settingsStore.SaveAsync(settings);
+        var updated = Draft.ToSettings(settings);
+        if (updated.StartWithWindows == settings.StartWithWindows && updated.StartZapretOnLaunch == settings.StartZapretOnLaunch &&
+            updated.MinimizeToTray == settings.MinimizeToTray && updated.CheckUpdates == settings.CheckUpdates &&
+            updated.CheckConnectionAfterStart == settings.CheckConnectionAfterStart && updated.Theme == settings.Theme)
+        { Message = "Настройки не изменились"; return; }
+        startup.SetEnabled(updated.StartWithWindows);
+        await settingsStore.SaveAsync(updated);
+        settings = updated;
+        OnPropertyChanged(nameof(Settings));
         Message = "Настройки сохранены";
     });
     public Task SearchListAsync(string file, string query) => RunAsync(async () =>
@@ -244,15 +281,18 @@ public sealed partial class MainViewModel(IZapretDistribution distribution, IStr
         ListLines.Clear();
         foreach (var line in await lists.SearchAsync(file, query)) ListLines.Add(line);
     });
-    public Task AddListEntryAsync(string file, string entry) => RunAsync(async () =>
+    public Task<bool> AddListEntryAsync(string file, string entry) => RunAsync(async () =>
     {
+        if (!await lists.WouldChangeAsync(file, entry, remove: false))
+        { Message = "Такая запись уже есть в выбранном списке. Файл не изменён."; return; }
         await BackupBeforeChangeAsync("Перед изменением " + file);
         await lists.AddEntryAsync(file, entry);
         Message = $"Запись добавлена в {file}";
         Log("INFO", $"Список {file} изменён");
     });
-    public Task RemoveListEntryAsync(string file, string entry) => RunAsync(async () =>
+    public Task<bool> RemoveListEntryAsync(string file, string entry) => RunAsync(async () =>
     {
+        if (!await lists.WouldChangeAsync(file, entry, remove: true)) return;
         await BackupBeforeChangeAsync("Перед изменением " + file);
         await lists.RemoveEntryAsync(file, entry);
         Message = $"Запись удалена из {file}";
@@ -391,7 +431,7 @@ public sealed partial class MainViewModel(IZapretDistribution distribution, IStr
     public void RequestElevation() => privilege.RestartElevated();
     public void ReportError(string context, Exception exception)
     {
-        Message = context + ": " + exception.Message;
+        Message = "Ошибка: " + context + ": " + exception.Message;
         Log("ERROR", context + ": " + exception);
     }
     public async Task<bool> StopOwnedForExitAsync()
@@ -399,11 +439,18 @@ public sealed partial class MainViewModel(IZapretDistribution distribution, IStr
         exitRequested = true;
         CancelStrategyTest();
         CancelConnectionCheck();
+        CancelPreparation();
+        if (preparationCompletion is { } pendingPreparation) await pendingPreparation.Task;
         // The test holds this gate until its PowerShell and IPSet cleanup has finished.
         await operationGate.WaitAsync();
         try
         {
-            await tester.RecoverInterruptedTestAsync();
+            try { await tester.RecoverInterruptedTestAsync(); }
+            catch (InterruptedTestRecoveryException ex)
+            {
+                // Keep the marker for the next launch; only owned process cleanup is required for exit.
+                Log("WARN", "IPSet требует восстановления при следующем запуске: " + ex.Message);
+            }
             if (await process.StopOwnedAsync()) Log("INFO", "Запущенный приложением Zapret остановлен при выходе.");
             return true;
         }
@@ -441,21 +488,31 @@ public sealed partial class MainViewModel(IZapretDistribution distribution, IStr
         if (LogLevelFilter == "ALL" || LogLevelFilter == level) FilteredLogs.Insert(0, Logs[^1]);
         logger.LogInformation("{Level}: {Line}", level, line);
     }
-    private async Task RunAsync(Func<Task> action, bool skipIfBusy = false)
+    private async Task<bool> RunAsync(Func<Task> action, bool skipIfBusy = false, bool allowDuringPreparation = false)
     {
+        if (TestingStrategies) { Message = StrategyTestRestriction; return false; }
+        if (PreparingData && !allowDuringPreparation)
+        {
+            Message = "Дождитесь завершения подготовки или отмените её перед изменением файлов.";
+            return false;
+        }
         if (skipIfBusy)
         {
-            if (!await operationGate.WaitAsync(0)) return;
+            if (!await operationGate.WaitAsync(0)) return false;
         }
         else await operationGate.WaitAsync();
         try
         {
-            if (exitRequested) return;
+            if (exitRequested) return false;
+            if (TestingStrategies) { Message = StrategyTestRestriction; return false; }
+            if (PreparingData && !allowDuringPreparation) return false;
             Busy = true;
             await action();
+            return true;
         }
         catch (Exception ex)
         {
+            if (ex is InterruptedTestRecoveryException) RecoveryRequired = true;
             Message = "Ошибка: " + (ex.Message.Contains("No process is associated with this object", StringComparison.OrdinalIgnoreCase)
                 ? "Не удалось получить состояние winws.exe. Повторите действие и проверьте журнал."
                 : ex is System.ComponentModel.Win32Exception { NativeErrorCode: 5 }
@@ -463,6 +520,7 @@ public sealed partial class MainViewModel(IZapretDistribution distribution, IStr
                     : ex.Message);
             Log("ERROR", ex.ToString());
             logger.LogError(ex, "Operation failed");
+            return false;
         }
         finally { Busy = false; operationGate.Release(); }
     }

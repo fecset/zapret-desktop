@@ -224,7 +224,8 @@ public sealed class UserInterfaceTests
         var offset = scroll.Offset.Y;
         Assert.True(offset > 0);
         action.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
-        await WaitForAsync(() => app.ViewModel.Backups.Count > 0 && !app.ViewModel.Busy);
+        await WaitForAsync(() => !app.ViewModel.Busy && (label == "Создать копию" ? app.ViewModel.Backups.Count > 0 :
+            app.ViewModel.Message is "Настройки сохранены" or "Настройки не изменились"));
         Dispatcher.UIThread.RunJobs();
         window.UpdateLayout();
         Assert.Equal(offset, PageScroll(window).Offset.Y);

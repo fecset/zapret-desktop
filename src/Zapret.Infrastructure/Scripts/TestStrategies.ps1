@@ -611,6 +611,7 @@ function Stop-Zapret {
 
 # Capture/restore running winws instances to return user ipset/config
 function Get-WinwsSnapshot {
+    if ($DesktopMode) { return @() }
     try {
         return Get-CimInstance Win32_Process -Filter "Name='winws.exe'" |
             Select-Object ProcessId, CommandLine, ExecutablePath
@@ -621,6 +622,8 @@ function Get-WinwsSnapshot {
 
 function Restore-WinwsSnapshot {
     param($snapshot)
+
+    if ($DesktopMode) { return }
 
     if (-not $snapshot -or $snapshot.Count -eq 0) { return }
 

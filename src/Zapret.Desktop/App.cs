@@ -121,7 +121,7 @@ public sealed class App : Application
             strategy.Header = "Выбрана: " + vm.SelectedStrategyName;
             choose.Header = "Сменить стратегию: " + vm.SelectedStrategyName;
             tray.ToolTipText = $"{indicator} Zapret Desktop · {vm.StatusText}";
-            start.IsEnabled = !vm.Busy && state == ZapretRunState.Stopped && vm.SelectedStrategy is not null;
+            start.IsEnabled = !vm.Busy && vm.Status?.CanStart == true && vm.SelectedStrategy is not null;
             stop.IsEnabled = !vm.Busy && (state is ZapretRunState.Running or ZapretRunState.ServiceRunning);
             removeService.IsEnabled = !vm.Busy && vm.Status?.ServiceStatus is not null and not "NotInstalled";
             foreach (var (item, choice) in strategyChoices)

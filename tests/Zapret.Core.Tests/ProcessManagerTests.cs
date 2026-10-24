@@ -8,6 +8,32 @@ namespace Zapret.Core.Tests;
 
 public sealed class ProcessManagerTests
 {
+    [Fact]
+    public async Task RunningServiceReportsItsScmPidInsteadOfAnUnrelatedOwnedProcess()
+    {
+        using var fixture = new OwnedFixture();
+        fixture.Service.State = "Running";
+        fixture.Service.ProcessId = Environment.ProcessId;
+        var status = await fixture.Manager.GetStatusAsync();
+        Assert.Equal(ZapretRunState.ServiceRunning, status.State);
+        Assert.Equal(Environment.ProcessId, status.ProcessId);
+    }
+
+    [Theory]
+    [InlineData("StartPending")]
+    [InlineData("StopPending")]
+    [InlineData("AccessDenied")]
+    [InlineData("Unknown")]
+    public async Task UnconfirmedServiceStopBlocksManualLaunchBeforeResolvingExecutable(string serviceState)
+    {
+        var drivers = new DriverTestSystem();
+        var service = new GuardService { State = serviceState };
+        var manager = new ZapretProcessManager(new ZapretDistribution(Path.GetTempPath()), service,
+            (_, _) => throw new NotSupportedException(), drivers.Driver, () => []);
+        var strategy = new ZapretStrategy("unused", "unused", "unused", "unused", [], "", false, false, false);
+        await Assert.ThrowsAsync<InvalidOperationException>(() => manager.StartAsync(strategy));
+    }
+
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
@@ -153,6 +179,8 @@ public sealed class ProcessManagerTests
     private sealed class GuardService : IServiceManager
     {
         public string State { get; set; } = "NotInstalled";
+        public int? ProcessId { get; set; }
+        public Task<ZapretServiceStatus> GetRuntimeStatusAsync(CancellationToken cancellationToken = default) => Task.FromResult(new ZapretServiceStatus(State, ProcessId));
         public Task<string> GetStatusAsync(CancellationToken cancellationToken = default) => Task.FromResult(State);
         public Task StopAsync(CancellationToken cancellationToken = default) { State = "Stopped"; return Task.CompletedTask; }
         public Task<bool> GetAutoStartAsync(CancellationToken cancellationToken = default) => throw new NotSupportedException();

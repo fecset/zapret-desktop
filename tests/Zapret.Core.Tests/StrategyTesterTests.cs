@@ -7,6 +7,32 @@ namespace Zapret.Core.Tests;
 public sealed class StrategyTesterTests
 {
     [Theory]
+    [InlineData(true, 0, 0)]
+    [InlineData(false, 2, 1)]
+    public async Task DesktopModeNeverCapturesOrRestartsExternalProcesses(bool desktopMode, int expectedQueries, int expectedStarts)
+    {
+        using var fixture = new Fixture();
+        var source = await ReadBundledScriptAsync();
+        var start = source.IndexOf("function Get-WinwsSnapshot", StringComparison.Ordinal);
+        var end = source.IndexOf("$env:NO_UPDATE_CHECK", start, StringComparison.Ordinal);
+        var probe = "param([switch]$DesktopMode, [string]$DistributionRoot)\n" +
+            "$DesktopMode = $" + (desktopMode ? "true" : "false") + "\n" + source[start..end] + "\n" + """
+            $script:queries = 0
+            $script:starts = 0
+            function Get-CimInstance { param($ClassName, $Filter) $script:queries++; return @() }
+            function Start-Process { param($FilePath, $ArgumentList, $WorkingDirectory, $WindowStyle) $script:starts++ }
+            $unused = Get-WinwsSnapshot
+            $snapshot = @([pscustomobject]@{ ExecutablePath = 'C:\dummy\winws.exe'; CommandLine = '"C:\dummy\winws.exe" --unused'; ProcessId = 123 })
+            Restore-WinwsSnapshot -snapshot $snapshot
+            Write-Host "QUERIES=$script:queries;STARTS=$script:starts"
+            """;
+        await File.WriteAllTextAsync(Path.Combine(fixture.Root, "utils", "test zapret.ps1"), probe);
+        var output = new List<string>();
+        await fixture.Tester.RunAsync(new InlineProgress<string>(output.Add), new InlineProgress<StrategyCheckProgress>(_ => { }));
+        Assert.Contains($"QUERIES={expectedQueries};STARTS={expectedStarts}", output);
+    }
+
+    [Theory]
     [InlineData(false)]
     [InlineData(true)]
     public async Task UpstreamScriptReplacementCannotMakeDesktopWaitForConsoleInput(bool upstreamExists)
@@ -42,12 +68,28 @@ public sealed class StrategyTesterTests
     }
 
     [Fact]
+    public async Task MissingBackupCanBeResolvedOnlyAfterAValidIpSetWasRestored()
+    {
+        using var fixture = new Fixture();
+        await fixture.InterruptAsync();
+        File.Delete(fixture.Backup);
+        await File.WriteAllTextAsync(fixture.IpSet, "not an IP address");
+        await Assert.ThrowsAsync<InvalidDataException>(() => ((IStrategyTester)fixture.Tester).ConfirmRestoredIpSetAsync());
+        Assert.True(File.Exists(fixture.Flag));
+        await File.WriteAllTextAsync(fixture.IpSet, "# restored\n1.2.3.0/24\n");
+        await ((IStrategyTester)fixture.Tester).ConfirmRestoredIpSetAsync();
+        Assert.False(File.Exists(fixture.Flag));
+        await fixture.Tester.RecoverInterruptedTestAsync();
+        Assert.Equal("# restored\n1.2.3.0/24\n", await File.ReadAllTextAsync(fixture.IpSet));
+    }
+
+    [Fact]
     public async Task MissingBackupPreservesTheMarkerAndReportsRecoveryFailure()
     {
         using var fixture = new Fixture();
         await fixture.InterruptAsync();
         File.Delete(fixture.Backup);
-        await Assert.ThrowsAsync<IOException>(() => fixture.Tester.RecoverInterruptedTestAsync());
+        await Assert.ThrowsAsync<InterruptedTestRecoveryException>(() => fixture.Tester.RecoverInterruptedTestAsync());
         Assert.True(File.Exists(fixture.Flag));
         Assert.Empty(await File.ReadAllBytesAsync(fixture.IpSet));
     }
@@ -159,7 +201,7 @@ public sealed class StrategyTesterTests
         await Task.WhenAll(output, error);
         Assert.True(File.Exists(fixture.Flag));
         Assert.Empty(await File.ReadAllBytesAsync(fixture.IpSet));
-        await Assert.ThrowsAsync<IOException>(() => fixture.Tester.RecoverInterruptedTestAsync());
+        await Assert.ThrowsAsync<InterruptedTestRecoveryException>(() => fixture.Tester.RecoverInterruptedTestAsync());
     }
 
     [Fact]

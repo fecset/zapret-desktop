@@ -50,13 +50,16 @@ public sealed class ZapretProcessManager : IZapretProcessManager
     public async Task<ZapretStatus> GetStatusAsync(CancellationToken cancellationToken = default)
     {
         cancellationToken.ThrowIfCancellationRequested();
-        var serviceStatus = await service.GetStatusAsync(cancellationToken);
+        var serviceSnapshot = await service.GetRuntimeStatusAsync(cancellationToken);
+        var serviceStatus = serviceSnapshot.State;
         var driverStatus = await driver.GetStatusAsync(cancellationToken);
         var processes = findWinws();
         try
         {
             var live = LiveOwnedProcess();
-            var process = live ?? processes.FirstOrDefault();
+            var process = serviceStatus == "Running"
+                ? processes.FirstOrDefault(item => item.Id == serviceSnapshot.ProcessId)
+                : live ?? processes.FirstOrDefault();
             string? runningStrategy = live is not null ? strategyId : null;
             if (serviceStatus == "Running")
             {
@@ -70,7 +73,8 @@ public sealed class ZapretProcessManager : IZapretProcessManager
             catch (InvalidOperationException) { }
             return new(serviceStatus == "Running" ? ZapretRunState.ServiceRunning :
                 live is not null ? ZapretRunState.Running : process is not null ? ZapretRunState.External : ZapretRunState.Stopped,
-                process?.Id, started, runningStrategy, driverStatus, serviceStatus);
+                serviceStatus == "Running" ? serviceSnapshot.ProcessId : process?.Id,
+                started, runningStrategy, driverStatus, serviceStatus);
         }
         finally { foreach (var process in processes) process.Dispose(); }
     }
@@ -81,7 +85,7 @@ public sealed class ZapretProcessManager : IZapretProcessManager
         try
         {
             var current = await GetStatusAsync(cancellationToken);
-            if (current.State != ZapretRunState.Stopped) throw new InvalidOperationException("winws.exe или служба zapret уже запущены.");
+            if (!current.CanStart) throw new InvalidOperationException("winws.exe уже запущен либо остановка службы zapret не подтверждена. Дождитесь завершения операции или проверьте службу.");
             var exe = SafePaths.RequireDirectFile(distribution.Root, Path.Combine(distribution.BinDirectory, "winws.exe"));
             var info = new ProcessStartInfo(exe) { WorkingDirectory = distribution.BinDirectory, UseShellExecute = false,
                 CreateNoWindow = true, RedirectStandardOutput = true, RedirectStandardError = true };

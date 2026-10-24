@@ -163,7 +163,7 @@ public sealed class DataProtectionTests
     }
 
     [Fact]
-    public async Task BackupRetentionKeepsFiftyCopiesAndProtectsTheSelectedRestoreCopy()
+    public async Task ManualBackupsAreNeverPrunedIncludingTheSelectedRestoreCopy()
     {
         using var fixture = new BackupFixture();
         await fixture.PopulateAsync();
@@ -172,13 +172,13 @@ public sealed class DataProtectionTests
         await File.WriteAllTextAsync(fixture.File("lists/list-general-user.txt"), "changed.example\n");
         await fixture.Service.RestoreAsync(selected.Id);
         var afterRestore = await fixture.Service.GetBackupsAsync();
-        Assert.Equal(50, afterRestore.Count);
+        Assert.Equal(51, afterRestore.Count);
         Assert.Contains(afterRestore, x => x.Id == selected.Id);
         Assert.Equal("my.example\r\n", await File.ReadAllTextAsync(fixture.File("lists/list-general-user.txt")));
         await fixture.Service.CreateAsync("next operation");
         var afterCreation = await fixture.Service.GetBackupsAsync();
-        Assert.Equal(50, afterCreation.Count);
-        Assert.DoesNotContain(afterCreation, x => x.Id == selected.Id);
+        Assert.Equal(52, afterCreation.Count);
+        Assert.Contains(afterCreation, x => x.Id == selected.Id);
     }
 
     [Theory]

@@ -6,6 +6,8 @@ public sealed record UserDataBackupInfo(string Id, DateTimeOffset CreatedAt, str
 public interface IUserDataBackupService
 {
     Task<UserDataBackupInfo> CreateAsync(string reason = "manual", CancellationToken cancellationToken = default);
+    Task<UserDataBackupInfo> CreateAutomaticAsync(string reason, CancellationToken cancellationToken = default) =>
+        CreateAsync(reason, cancellationToken);
     Task<IReadOnlyList<UserDataBackupInfo>> GetBackupsAsync(CancellationToken cancellationToken = default);
     Task ExportAsync(Stream destination, CancellationToken cancellationToken = default);
     Task ImportAsync(Stream source, CancellationToken cancellationToken = default);

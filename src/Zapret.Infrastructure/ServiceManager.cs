@@ -29,6 +29,7 @@ public sealed class ScServiceManager : IServiceManager
     }
 
     public Task<string> GetStatusAsync(CancellationToken cancellationToken = default) => system.GetStatusAsync(cancellationToken);
+    public Task<ZapretServiceStatus> GetRuntimeStatusAsync(CancellationToken cancellationToken = default) => system.GetRuntimeStatusAsync(cancellationToken);
     public Task<bool> GetAutoStartAsync(CancellationToken cancellationToken = default) => system.GetAutoStartAsync(cancellationToken);
 
     public static Task<string> QueryStatusAsync(string serviceName, CancellationToken cancellationToken = default)
@@ -193,6 +194,12 @@ public sealed class ScServiceManager : IServiceManager
 
     private sealed class WindowsZapretServiceSystem : IZapretServiceSystem
     {
+        public Task<ZapretServiceStatus> GetRuntimeStatusAsync(CancellationToken cancellationToken)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var (state, pid) = QueryServiceState(Name);
+            return Task.FromResult(new ZapretServiceStatus(state, pid is > 0 and <= int.MaxValue ? (int)pid : null));
+        }
         public Task<string> GetStatusAsync(CancellationToken cancellationToken) => QueryStatusAsync(Name, cancellationToken);
         public Task<bool> GetAutoStartAsync(CancellationToken cancellationToken)
         {
@@ -252,6 +259,8 @@ public sealed class ScServiceManager : IServiceManager
 internal interface IZapretServiceSystem
 {
     Task<string> GetStatusAsync(CancellationToken cancellationToken);
+    async Task<ZapretServiceStatus> GetRuntimeStatusAsync(CancellationToken cancellationToken) =>
+        new(await GetStatusAsync(cancellationToken), null);
     Task<bool> GetAutoStartAsync(CancellationToken cancellationToken);
     Task<(int Code, string Output)> RunAsync(string[] args, CancellationToken cancellationToken);
     void SetStrategyName(string strategyName);

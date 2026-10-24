@@ -23,16 +23,17 @@ public sealed partial class MainWindow
         var hero = new Grid { ColumnDefinitions = new ColumnDefinitions("*,Auto"), RowDefinitions = new RowDefinitions("Auto,Auto") };
         var summary = new StackPanel { Spacing = 10 };
         summary.Children.Add(StatusPill(running ? "ZAPRET АКТИВЕН" : state == ZapretRunState.External ? "ВНЕШНИЙ ЗАПУСК" : "ZAPRET ОСТАНОВЛЕН", statusColor));
-        summary.Children.Add(Text(running ? "Соединение под управлением Zapret" : state == ZapretRunState.External ?
-            "winws запущен другим приложением" : "Готов к запуску", 22, FontWeight.SemiBold));
+        summary.Children.Add(Text(running ? "Zapret запущен" : state == ZapretRunState.External ?
+            "winws запущен другим приложением" : vm.Status?.CanStart == true ? "Готов к запуску" : "Проверьте состояние службы", 22, FontWeight.SemiBold));
         summary.Children.Add(Text(running ? "Вы можете остановить Zapret одним нажатием." :
             state == ZapretRunState.External ? "Чтобы избежать конфликта, остановите внешний экземпляр там, где он был запущен." :
             "Выберите стратегию ниже и нажмите «Запустить Zapret». Для работы нужны права администратора.", 13, color: MutedBrush));
         hero.Children.Add(summary);
         var mainAction = EngineButton(running ? "Остановить Zapret" : "Запустить Zapret",
             running ? vm.StopAsync : vm.StartAsync,
-            () => running || (state == ZapretRunState.Stopped && vm.SelectedStrategy is not null),
-            primary: !running, danger: running);
+            () => running || (vm.Status?.CanStart == true && vm.SelectedStrategy is not null),
+            primary: !running, danger: running,
+            activityKey: running ? "engine-stop" : "engine-start:" + vm.SelectedStrategy?.Id);
         mainAction.MinWidth = 177;
         mainAction.MinHeight = 46;
         mainAction.HorizontalContentAlignment = HorizontalAlignment.Center;
@@ -74,6 +75,7 @@ public sealed partial class MainWindow
         var strategyText = new StackPanel { Spacing = 5 };
         strategyText.Children.Add(Text("Стратегия для следующего запуска", 16, FontWeight.SemiBold));
         strategyText.Children.Add(Text("Выбор сохраняется. Если Zapret уже работает, смена вступит в силу после перезапуска.", 12, color: MutedBrush));
+        strategyText.Children.Add(Text("Стратегия — набор настроек для вашей сети. Выберите вариант вручную; если нужные сервисы не работают, сравните варианты в разделе «Стратегии».", 12, color: MutedBrush));
         strategy.Children.Add(strategyText);
         var picker = StrategyPicker();
         picker.Margin = new Thickness(20, 0, 0, 0);
@@ -93,7 +95,7 @@ public sealed partial class MainWindow
             Show("Диагностика");
             await vm.DiagnoseAsync();
             if (currentPage == "Диагностика") Show("Диагностика");
-        });
+        }, activityKey: "diagnostics");
         diag.Margin = new Thickness(0, 0, 8, 0);
         quick.Children.Add(diag);
         var choose = QuickAction(FluentIcons.Apps, "Подобрать стратегию", "Сравнить доступные варианты", () =>
@@ -132,7 +134,7 @@ public sealed partial class MainWindow
         return new Border { Child = line, Background = SurfaceRaisedBrush, Padding = new Thickness(10, 5),
             CornerRadius = new CornerRadius(14), HorizontalAlignment = HorizontalAlignment.Left };
     }
-    private Button QuickAction(Geometry icon, string title, string subtitle, Func<Task> action)
+    private Button QuickAction(Geometry icon, string title, string subtitle, Func<Task> action, string? activityKey = null)
     {
         var line = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 13 };
         line.Children.Add(new Border { Width = 36, Height = 36, CornerRadius = new CornerRadius(10),
@@ -143,10 +145,11 @@ public sealed partial class MainWindow
         words.Children.Add(Text(title, 14, FontWeight.SemiBold));
         words.Children.Add(Text(subtitle, 13, color: MutedBrush));
         line.Children.Add(words);
-        var button = new Button { Content = line, Padding = new Thickness(16), Background = SurfaceBrush,
+        var button = new ActionButton { Content = line, Padding = new Thickness(16), Background = SurfaceBrush,
             BorderBrush = OutlineBrush, BorderThickness = new Thickness(1), CornerRadius = new CornerRadius(12),
             HorizontalContentAlignment = HorizontalAlignment.Left, HorizontalAlignment = HorizontalAlignment.Stretch, MinHeight = 75 };
-        button.Click += async (_, _) => await action();
+        Avalonia.Automation.AutomationProperties.SetName(button, title);
+        TrackButton(button, activityKey ?? "quick:" + title, action);
         return button;
     }
 
@@ -156,7 +159,8 @@ public sealed partial class MainWindow
         Heading("Стратегии", "Выберите способ запуска. Zapret автоматически обнаруживает новые general*.bat.");
         page.Children.Add(Text($"Доступные стратегии: {vm.Strategies.Count}", 14, FontWeight.SemiBold, MutedBrush));
         var bar = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 9 };
-        strategyStartButton = Button("Автоподбор", vm.TestStrategiesAsync, primary: true);
+        strategyStartButton = Button("Автоподбор", vm.TestStrategiesAsync, primary: true,
+            isLoading: () => vm.TestingStrategies);
         strategyCancelButton = Button("Отменить тест", () => { vm.CancelStrategyTest(); return Task.CompletedTask; });
         bar.Children.Add(strategyStartButton);
         bar.Children.Add(strategyCancelButton);
@@ -195,13 +199,13 @@ public sealed partial class MainWindow
             row.Children.Add(info);
             var actions = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 7,
                 VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(15, 0, 0, 0) };
-            var select = EngineButton(selected ? "Выбрана" : "Выбрать", () => vm.SelectAsync(item), () => !selected);
+            var select = EngineButton(selected ? "Выбрана" : "Выбрать", () => vm.SelectAsync(item), () => !selected,
+                activityKey: "strategy-select:" + item.Id);
             actions.Children.Add(select);
             var start = EngineButton("Запустить", async () =>
             {
-                await vm.SelectAsync(item);
-                await vm.StartAsync();
-            }, () => vm.Status?.State == ZapretRunState.Stopped, primary: true);
+                if (await vm.SelectAsync(item)) await vm.StartAsync();
+            }, () => vm.Status?.CanStart == true, primary: true, activityKey: "engine-start:" + item.Id);
             actions.Children.Add(start);
             Grid.SetColumn(actions, 1);
             row.Children.Add(actions);

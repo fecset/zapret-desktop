@@ -14,6 +14,7 @@ public sealed partial class MainWindow
     private void BuildLists()
     {
         Heading("Списки", "Просматривайте и редактируйте домены и IP-адреса в файлах zapret.");
+        var restricted = StrategyTestRestrictionNotice();
         if (vm.ListFiles.Count == 0)
         {
             page.Children.Add(Panel(Text("Файлы .txt в папке zapret/lists не найдены. Проверьте комплект zapret.", 14, color: WarnBrush)));
@@ -59,14 +60,14 @@ public sealed partial class MainWindow
         editRow.Children.Add(entry);
         var add = Button("Добавить домен", async () =>
         {
-            await vm.AddListEntryAsync(SelectedFile(), entry.Text ?? "");
+            if (!await vm.AddListEntryAsync(SelectedFile(), entry.Text ?? "")) return;
             query.Text = "";
             await LoadAsync();
             entry.Text = "";
         }, primary: true);
         var remove = Button("Удалить домен", async () =>
         {
-            await vm.RemoveListEntryAsync(SelectedFile(), entry.Text ?? "");
+            if (!await vm.RemoveListEntryAsync(SelectedFile(), entry.Text ?? "")) return;
             query.Text = "";
             await LoadAsync();
             entry.Text = "";
@@ -93,25 +94,34 @@ public sealed partial class MainWindow
             UpdateEditor();
             await LoadAsync();
         };
-        entry.TextChanged += (_, _) => UpdateEditor();
+        entry.PropertyChanged += (_, change) =>
+        {
+            if (change.Property == TextBox.TextProperty) UpdateEditor();
+        };
         entries.SelectionChanged += (_, _) =>
         {
             if (entries.SelectedItem is string selected) entry.Text = selected.Trim();
         };
         UpdateEditor();
-        FillRemainingHeight(Panel(entries, 8));
-        _ = LoadAsync();
+        FillRemainingHeight(Panel(restricted
+            ? Text("Содержимое списка временно скрыто. Оно загрузится автоматически после завершения или отмены автоподбора.", 13, color: MutedBrush)
+            : entries, 8));
+        if (restricted) { tools.IsEnabled = false; edit.IsEnabled = false; entries.IsEnabled = false; }
+        else _ = LoadAsync();
     }
 
     private void BuildDiagnostics()
     {
         Heading("Диагностика", "Проверка компонентов и подсказки для устранения неполадок.");
+        var restricted = StrategyTestRestrictionNotice();
         var actions = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 9 };
-        actions.Children.Add(Button("Проверить систему", async () =>
+        var diagnose = Button("Проверить систему", async () =>
         {
             await vm.DiagnoseAsync();
             if (currentPage == "Диагностика") Show("Диагностика");
-        }, primary: true));
+        }, primary: true, activityKey: "diagnostics");
+        diagnose.IsEnabled = !restricted;
+        actions.Children.Add(diagnose);
         actions.Children.Add(Button("Скопировать отчёт", async () =>
         {
             if (Clipboard is not null) await Clipboard.SetTextAsync(vm.BuildDiagnosticReport());
@@ -119,7 +129,9 @@ public sealed partial class MainWindow
         page.Children.Add(actions);
         if (vm.Diagnostics.Count == 0)
         {
-            page.Children.Add(Panel(Text("Нажмите «Проверить систему», чтобы увидеть состояние файлов, драйвера и службы.", 13, color: MutedBrush)));
+            page.Children.Add(Panel(Text(restricted
+                ? "Диагностику можно будет запустить после завершения или отмены автоподбора."
+                : "Нажмите «Проверить систему», чтобы увидеть состояние файлов, драйвера и службы.", 13, color: MutedBrush)));
             return;
         }
         var good = vm.Diagnostics.Count(x => x.Passed);
@@ -219,35 +231,41 @@ public sealed partial class MainWindow
     {
         var stack = new StackPanel { Spacing = 12 };
         stack.Children.Add(Text("Фильтры", 17, FontWeight.SemiBold));
-        stack.Children.Add(Text("После изменения фильтра перезапустите работающую стратегию.", 12, color: WarnBrush));
+        if (vm.FiltersNeedRestart)
+        {
+            var notice = Text("Фильтры сохранены. Перезапустите работающий Zapret, чтобы применить изменения.", 13, color: WarnBrush);
+            Avalonia.Automation.AutomationProperties.SetAutomationId(notice, "filter-restart-notice");
+            stack.Children.Add(notice);
+        }
         stack.Children.Add(Text("Game Filter", 13, FontWeight.SemiBold));
-        var game = Dropdown(Enum.GetValues<GameFilterMode>(), vm.Game.Mode, 205);
+        var game = Dropdown(Enum.GetValues<GameFilterMode>(), vm.Draft.GameMode, 205);
         game.ItemTemplate = new FuncDataTemplate<GameFilterMode>((mode, _) => Text(mode switch
         {
             GameFilterMode.Disabled => "Выключен", GameFilterMode.All => "TCP и UDP",
             GameFilterMode.Tcp => "Только TCP", GameFilterMode.Udp => "Только UDP", _ => "Неизвестно"
         }, 12));
-        var tcp = Input("TCP порты", 170); tcp.Text = vm.Game.TcpPorts;
-        var udp = Input("UDP порты", 170); udp.Text = vm.Game.UdpPorts;
+        var tcp = Input("TCP порты", 170); tcp.Text = vm.Draft.TcpPorts;
+        var udp = Input("UDP порты", 170); udp.Text = vm.Draft.UdpPorts;
+        game.SelectionChanged += (_, _) => { if (game.SelectedItem is GameFilterMode mode) vm.Draft.GameMode = mode; };
+        tcp.PropertyChanged += (_, change) => { if (change.Property == TextBox.TextProperty) vm.Draft.TcpPorts = tcp.Text ?? ""; };
+        udp.PropertyChanged += (_, change) => { if (change.Property == TextBox.TextProperty) vm.Draft.UdpPorts = udp.Text ?? ""; };
         var gameRow = new WrapPanel { Orientation = Orientation.Horizontal };
-        var applyGame = Button("Применить", () => vm.SetGameAsync(
-            (GameFilterMode)(game.SelectedItem ?? GameFilterMode.Disabled), tcp.Text ?? "", udp.Text ?? ""), primary: true);
-        foreach (var item in new Control[] { Labelled("Режим", game), Labelled("TCP порты", tcp), Labelled("UDP порты", udp),
-            Labelled(" ", applyGame) })
+        foreach (var item in new Control[] { Labelled("Режим", game), Labelled("TCP порты", tcp), Labelled("UDP порты", udp) })
         { item.Margin = new Thickness(0, 0, 8, 8); gameRow.Children.Add(item); }
         stack.Children.Add(gameRow);
         stack.Children.Add(Text("IPSet Filter", 13, FontWeight.SemiBold));
-        var ipset = Dropdown(Enum.GetValues<IpSetMode>(), vm.IpSet, 275);
+        var ipset = Dropdown(Enum.GetValues<IpSetMode>(), vm.Draft.IpSetMode, 275);
         ipset.ItemTemplate = new FuncDataTemplate<IpSetMode>((mode, _) => Text(mode switch
         {
             IpSetMode.None => "Не проверять IP-адреса", IpSetMode.Loaded => "Только адреса из списка",
             IpSetMode.Any => "Все IP-адреса", _ => "Неизвестно"
         }, 12));
-        var ipRow = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 8 };
+        ipset.SelectionChanged += (_, _) => { if (ipset.SelectedItem is IpSetMode mode) vm.Draft.IpSetMode = mode; };
+        var ipRow = new WrapPanel { Orientation = Orientation.Horizontal };
         ipRow.Children.Add(ipset);
-        ipRow.Children.Add(Button("Применить", () => vm.SetIpSetAsync((IpSetMode)(ipset.SelectedItem ?? IpSetMode.None)), primary: true));
         stack.Children.Add(ipRow);
-        stack.Children.Add(EngineButton("Применить и перезапустить Zapret", vm.ApplyAndRestartAsync,
+        stack.Children.Add(EngineButton("Сохранить фильтры", () => vm.ApplyFilterDraftAsync(), primary: true));
+        stack.Children.Add(EngineButton("Применить и перезапустить Zapret", () => vm.ApplyFilterDraftAsync(restart: true),
             () => vm.SelectedStrategy is not null && vm.Status?.State != ZapretRunState.External));
         page.Children.Add(Panel(stack));
     }
@@ -255,24 +273,26 @@ public sealed partial class MainWindow
     {
         var stack = new StackPanel { Spacing = 12 };
         stack.Children.Add(Text("Приложение", 17, FontWeight.SemiBold));
-        var windows = Check("Запускать приложение вместе с Windows", vm.Settings.StartWithWindows);
-        var launch = Check("Запускать Zapret при открытии приложения", vm.Settings.StartZapretOnLaunch);
-        var tray = Check("При закрытии скрывать окно в трей", vm.Settings.MinimizeToTray);
-        var updates = Check("Проверять обновления при запуске", vm.Settings.CheckUpdates);
-        foreach (var check in new[] { windows, launch, tray, updates }) stack.Children.Add(check);
+        var windows = Check("Запускать приложение вместе с Windows", vm.Draft.StartWithWindows);
+        var launch = Check("Запускать Zapret при открытии приложения", vm.Draft.StartZapretOnLaunch);
+        var tray = Check("При закрытии скрывать окно в трей", vm.Draft.MinimizeToTray);
+        var updates = Check("Проверять обновления при запуске", vm.Draft.CheckUpdates);
+        var connection = Check("Проверять доступность сервисов после запуска Zapret", vm.Draft.CheckConnectionAfterStart);
+        windows.IsCheckedChanged += (_, _) => vm.Draft.StartWithWindows = windows.IsChecked == true;
+        launch.IsCheckedChanged += (_, _) => vm.Draft.StartZapretOnLaunch = launch.IsChecked == true;
+        tray.IsCheckedChanged += (_, _) => vm.Draft.MinimizeToTray = tray.IsChecked == true;
+        updates.IsCheckedChanged += (_, _) => vm.Draft.CheckUpdates = updates.IsChecked == true;
+        connection.IsCheckedChanged += (_, _) => vm.Draft.CheckConnectionAfterStart = connection.IsChecked == true;
+        foreach (var check in new[] { windows, launch, tray, updates, connection }) stack.Children.Add(check);
         stack.Children.Add(Text("Чтобы выбранная стратегия запускалась вместе с Windows, включите первые два пункта.", 12, color: MutedBrush));
         var themeRow = new StackPanel { Orientation = Orientation.Vertical, Spacing = 6 };
         themeRow.Children.Add(Text("Тема", 12, color: MutedBrush));
-        var theme = Dropdown(new[] { "System", "Light", "Dark" }, vm.Settings.Theme, 160);
+        var theme = Dropdown(new[] { "System", "Light", "Dark" }, vm.Draft.Theme, 160);
+        theme.SelectionChanged += (_, _) => vm.Draft.Theme = theme.SelectedItem as string ?? "System";
         themeRow.Children.Add(theme);
         stack.Children.Add(themeRow);
         stack.Children.Add(Button("Сохранить настройки", async () =>
         {
-            vm.Settings.StartWithWindows = windows.IsChecked == true;
-            vm.Settings.StartZapretOnLaunch = launch.IsChecked == true;
-            vm.Settings.MinimizeToTray = tray.IsChecked == true;
-            vm.Settings.CheckUpdates = updates.IsChecked == true;
-            vm.Settings.Theme = theme.SelectedItem as string ?? "System";
             await vm.SaveSettingsAsync();
             ApplyTheme();
         }, primary: true));
@@ -282,13 +302,19 @@ public sealed partial class MainWindow
     {
         var stack = new StackPanel { Spacing = 10 };
         stack.Children.Add(Text("Обновления zapret и Zapret Desktop", 17, FontWeight.SemiBold));
-        stack.Children.Add(Text("Новые версии проверяются на GitHub. Если доступно обновление, его страница откроется в браузере.", 12, color: MutedBrush));
-        updateCheckButton = Button("Проверить обновления", CheckAndOpenUpdatesAsync);
+        stack.Children.Add(Text("Новые версии проверяются на GitHub. Страницу выпуска можно открыть отдельной кнопкой.", 12, color: MutedBrush));
+        updateCheckButton = Button("Проверить обновления", CheckForUpdatesAsync, isLoading: () => vm.CheckingUpdates);
         stack.Children.Add(updateCheckButton);
         upstreamUpdateStatus = Text("", 12);
         desktopUpdateStatus = Text("", 12);
         stack.Children.Add(upstreamUpdateStatus);
         stack.Children.Add(desktopUpdateStatus);
+        var releases = new WrapPanel { ItemSpacing = 8, LineSpacing = 8 };
+        upstreamReleaseButton = Button("Открыть выпуск zapret", () => OpenReleaseAsync(vm.UpstreamUpdate, "Flowseal/zapret-discord-youtube"));
+        desktopReleaseButton = Button("Открыть выпуск Desktop", () => OpenReleaseAsync(vm.DesktopUpdate, "fecset/zapret-desktop"));
+        releases.Children.Add(upstreamReleaseButton);
+        releases.Children.Add(desktopReleaseButton);
+        stack.Children.Add(releases);
         RefreshUpdateDisplay();
         page.Children.Add(Panel(stack));
     }

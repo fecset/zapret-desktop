@@ -222,6 +222,145 @@ public sealed class ManagedUpdateTests : IDisposable
     }
 
     [Fact]
+    public async Task HostsApplyingTheSameUpdateTwiceDoesNotRewriteOrCreateAnotherBackup()
+    {
+        using var client = TextClient("203.0.113.5 youtube.com www.youtube.com\n");
+        var service = Service(client);
+        var first = await service.ApplyHostsAsync(await service.PreviewHostsAsync());
+        Assert.NotNull(first.BackupPath);
+        var originalBytes = File.ReadAllBytes(HostsPath);
+        File.SetLastWriteTimeUtc(HostsPath, new DateTime(2020, 1, 2, 3, 4, 5, DateTimeKind.Utc));
+        var originalWriteTime = File.GetLastWriteTimeUtc(HostsPath);
+        var originalBackups = Directory.GetFiles(root, "hosts.zapret-backup-*").Order().ToArray();
+
+        var result = await service.ApplyHostsAsync(await service.PreviewHostsAsync());
+
+        Assert.Null(result.BackupPath);
+        Assert.False(result.Changed);
+        Assert.Equal(originalBytes, File.ReadAllBytes(HostsPath));
+        Assert.Equal(originalWriteTime, File.GetLastWriteTimeUtc(HostsPath));
+        Assert.Equal(originalBackups, Directory.GetFiles(root, "hosts.zapret-backup-*").Order().ToArray());
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task HostsEquivalentLfBlockKeepsItsPositionAndDoesNotRewriteBytes(bool withBom)
+    {
+        const string prefix = "# custom before\n127.0.0.1 before.local\n\n";
+        const string suffix = "# custom after\n192.0.2.1 after.local";
+        const string original = prefix + "# BEGIN Zapret Desktop managed hosts\n" +
+            "# upstream\n203.0.113.5 youtube.com www.youtube.com\n" +
+            "# END Zapret Desktop managed hosts\n" + suffix;
+        File.WriteAllText(HostsPath, original, new UTF8Encoding(withBom));
+        var originalBytes = File.ReadAllBytes(HostsPath);
+        File.SetLastWriteTimeUtc(HostsPath, new DateTime(2020, 1, 2, 3, 4, 5, DateTimeKind.Utc));
+        var originalWriteTime = File.GetLastWriteTimeUtc(HostsPath);
+        using var client = TextClient("# upstream\r\n203.0.113.5 youtube.com www.youtube.com\r\n");
+        var service = Service(client);
+
+        var preview = await service.PreviewHostsAsync();
+
+        Assert.False(preview.HasChanges);
+        Assert.Equal(0, preview.AddedCount);
+        Assert.Equal(0, preview.RemovedCount);
+        Assert.StartsWith((withBom ? "\uFEFF" : "") + prefix + "# BEGIN Zapret Desktop managed hosts", preview.ProposedContent);
+        Assert.EndsWith(suffix, preview.ProposedContent);
+        var result = await service.ApplyHostsAsync(preview);
+        Assert.Null(result.BackupPath);
+        Assert.False(result.Changed);
+        Assert.Equal(originalBytes, File.ReadAllBytes(HostsPath));
+        Assert.Equal(originalWriteTime, File.GetLastWriteTimeUtc(HostsPath));
+        Assert.Empty(Directory.GetFiles(root, "hosts.zapret-backup-*"));
+    }
+
+    [Fact]
+    public async Task HostsChangedBlockKeepsExactOutsideTextAndPosition()
+    {
+        const string prefix = "\uFEFF# custom before\r\n127.0.0.1 before.local\n\n";
+        const string suffix = "\n# custom after\r\n192.0.2.1 after.local";
+        File.WriteAllText(HostsPath, prefix + "# BEGIN Zapret Desktop managed hosts\n" +
+            "203.0.113.1 old.example\n# END Zapret Desktop managed hosts" + suffix,
+            new UTF8Encoding(false));
+        using var client = TextClient("203.0.113.5 youtube.com\n");
+        var service = Service(client);
+
+        var preview = await service.PreviewHostsAsync();
+
+        Assert.True(preview.HasChanges);
+        Assert.Equal(1, preview.AddedCount);
+        Assert.Equal(1, preview.RemovedCount);
+        Assert.Equal(prefix + "# BEGIN Zapret Desktop managed hosts\r\n" +
+            "203.0.113.5 youtube.com\r\n# END Zapret Desktop managed hosts" + suffix,
+            preview.ProposedContent);
+        var result = await service.ApplyHostsAsync(preview);
+        Assert.True(result.Changed);
+        Assert.Equal(preview.ProposedContent, new UTF8Encoding(false, true).GetString(File.ReadAllBytes(HostsPath)));
+    }
+
+    [Fact]
+    public void HostsPreviewCountsUniqueMappingsRatherThanLinesAliasesOrComments()
+    {
+        var preview = new HostsUpdatePreview("id", "source", "target",
+            "# current comment\n203.0.113.1 Same.Example removed.example\n" +
+            "203.0.113.1 same.example\n2001:0db8::1 ipv6.example\n127.0.0.1 custom.local\n",
+            "# revised comment\n203.0.113.1 same.example added.example added.example # aliases\n" +
+            "2001:db8:0:0::1 IPV6.EXAMPLE\n127.0.0.1 custom.local\n\n", 6, "summary");
+
+        Assert.True(preview.HasChanges);
+        Assert.Equal(1, preview.AddedCount);
+        Assert.Equal(1, preview.RemovedCount);
+    }
+
+    [Theory]
+    [InlineData("\uFEFF127.0.0.1 localhost\r\n", "127.0.0.1 localhost\n")]
+    [InlineData("127.0.0.1 localhost", "127.0.0.1 localhost\r\n")]
+    public void HostsPreviewIgnoresOnlyBomLineEndingsAndFinalNewlines(string current, string proposed)
+    {
+        var preview = new HostsUpdatePreview("id", "source", "target", current, proposed, 1, "summary");
+
+        Assert.False(preview.HasChanges);
+        Assert.Equal(0, preview.AddedCount);
+        Assert.Equal(0, preview.RemovedCount);
+        Assert.True((preview with { ProposedContent = proposed + "# changed comment\n" }).HasChanges);
+    }
+
+    [Fact]
+    public async Task HostsUnchangedApplyStillRequiresAnUnmodifiedKnownPreviewAndConsumesIt()
+    {
+        File.WriteAllText(HostsPath, "# BEGIN Zapret Desktop managed hosts\n" +
+            "203.0.113.5 youtube.com\n# END Zapret Desktop managed hosts", new UTF8Encoding(true));
+        using var client = TextClient("203.0.113.5 youtube.com\n");
+        var service = Service(client);
+        var preview = await service.PreviewHostsAsync();
+        Assert.False(preview.HasChanges);
+
+        await Assert.ThrowsAsync<InvalidOperationException>(() => service.ApplyHostsAsync(preview with { Id = "unknown" }));
+        await Assert.ThrowsAsync<InvalidOperationException>(() => service.ApplyHostsAsync(preview with { Summary = "modified" }));
+        Assert.False((await service.ApplyHostsAsync(preview)).Changed);
+        await Assert.ThrowsAsync<InvalidOperationException>(() => service.ApplyHostsAsync(preview));
+        Assert.Empty(Directory.GetFiles(root, "hosts.zapret-backup-*"));
+    }
+
+    [Fact]
+    public async Task HostsUnchangedPreviewStillRejectsExternalEdits()
+    {
+        const string original = "# BEGIN Zapret Desktop managed hosts\r\n" +
+            "203.0.113.5 youtube.com\r\n# END Zapret Desktop managed hosts\r\n";
+        File.WriteAllText(HostsPath, original);
+        using var client = TextClient("203.0.113.5 youtube.com\n");
+        var service = Service(client);
+        var preview = await service.PreviewHostsAsync();
+        File.AppendAllText(HostsPath, "127.0.0.1 added.local\n");
+        var editedBytes = File.ReadAllBytes(HostsPath);
+
+        await Assert.ThrowsAsync<InvalidOperationException>(() => service.ApplyHostsAsync(preview));
+
+        Assert.Equal(editedBytes, File.ReadAllBytes(HostsPath));
+        Assert.Empty(Directory.GetFiles(root, "hosts.zapret-backup-*"));
+    }
+
+    [Fact]
     public async Task RejectsOversizedAndChangedIpSetPlans()
     {
         using var client = TextClient("1.1.1.1\n");
