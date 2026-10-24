@@ -2,6 +2,7 @@ using System.IO.Compression;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using System.Text.Json.Serialization;
 using Zapret.Core;
 
@@ -20,6 +21,9 @@ public sealed class UserDataBackupService : IUserDataBackupService
         "lists/ipset-custom.txt", "lists/ipset-all.txt", "lists/ipset-all.txt.backup", "utils/game_filter.enabled",
         "bin/ACTIVE_DISCORD_UDP.bin", "bin/ACTIVE_GAME_UDP.bin"];
     private static readonly string[] OriginalFiles = DataProtectionPaths.PayloadTargets.Select(x => "originals/" + x).ToArray();
+    private static readonly HashSet<string> PersonalLists = new([
+        "lists/list-general-user.txt", "lists/list-exclude-user.txt", "lists/ipset-exclude-user.txt",
+        "lists/list-custom.txt", "lists/ipset-custom.txt"], StringComparer.Ordinal);
     private static readonly HashSet<string> AllowedEntries = new(ManagedFiles.Concat(OriginalFiles).Append("settings.json").Append("manifest.json"), StringComparer.Ordinal);
     private static readonly JsonSerializerOptions JsonOptions = new()
     {
@@ -40,7 +44,7 @@ public sealed class UserDataBackupService : IUserDataBackupService
         await paths.Gate.WaitAsync(cancellationToken);
         try
         {
-            return (await SaveBackupAsync(await CaptureAsync(cancellationToken), reason, cancellationToken)).Info;
+            return (await SaveBackupAsync(await CaptureArchiveAsync(cancellationToken), reason, cancellationToken)).Info;
         }
         finally { paths.Gate.Release(); }
     }
@@ -49,7 +53,7 @@ public sealed class UserDataBackupService : IUserDataBackupService
     {
         ValidateReason(reason);
         await paths.Gate.WaitAsync(cancellationToken);
-        try { return await SaveAutomaticBackupAsync(await CaptureAsync(cancellationToken), reason, cancellationToken); }
+        try { return await SaveAutomaticBackupAsync(await CaptureArchiveAsync(cancellationToken), reason, cancellationToken); }
         finally { paths.Gate.Release(); }
     }
 
@@ -84,7 +88,7 @@ public sealed class UserDataBackupService : IUserDataBackupService
         ArgumentNullException.ThrowIfNull(destination);
         if (!destination.CanWrite) throw new ArgumentException("The destination is not writable.", nameof(destination));
         await paths.Gate.WaitAsync(cancellationToken);
-        try { await WriteArchiveAsync(destination, await CaptureAsync(cancellationToken), "export", cancellationToken); }
+        try { await WriteArchiveAsync(destination, await CaptureArchiveAsync(cancellationToken), "export", cancellationToken); }
         finally { paths.Gate.Release(); }
     }
 
@@ -93,7 +97,7 @@ public sealed class UserDataBackupService : IUserDataBackupService
         ArgumentNullException.ThrowIfNull(source);
         var snapshot = await ReadArchiveAsync(source, cancellationToken);
         await paths.Gate.WaitAsync(cancellationToken);
-        try { await ApplyWithBackupAsync(snapshot.Files, "before import", cancellationToken); }
+        try { await ApplyAsync(snapshot.Files, cancellationToken); }
         finally { paths.Gate.Release(); }
     }
 
@@ -105,9 +109,18 @@ public sealed class UserDataBackupService : IUserDataBackupService
         {
             await using var stream = File.OpenRead(file);
             var snapshot = await ReadArchiveAsync(stream, cancellationToken);
-            await ApplyWithBackupAsync(snapshot.Files, "before restore", cancellationToken, id);
+            await ApplyAsync(snapshot.Files, cancellationToken);
         }
         finally { paths.Gate.Release(); }
+    }
+
+    private async Task<Dictionary<string, byte[]>> CaptureArchiveAsync(CancellationToken ct)
+    {
+        var files = await CaptureAsync(ct);
+        // Explicitly record the disabled mode; absence in legacy/partial archives
+        // must never be interpreted as permission to delete a current file.
+        files.TryAdd("utils/game_filter.enabled", Encoding.UTF8.GetBytes("mode=disabled\ntcp=1024-65535\nudp=1024-65535\n"));
+        return files;
     }
 
     private async Task<Dictionary<string, byte[]>> CaptureAsync(CancellationToken ct)
@@ -208,14 +221,14 @@ public sealed class UserDataBackupService : IUserDataBackupService
         return new(new(entry.Id, snapshot.Manifest.CreatedAt, snapshot.Manifest.Reason, snapshot.Files.Count, bytes.Length), snapshot);
     }
 
-    private async Task ApplyWithBackupAsync(Dictionary<string, byte[]> files, string reason, CancellationToken ct, string? protectedBackupId = null)
+    private async Task ApplyAsync(Dictionary<string, byte[]> archivedFiles, CancellationToken ct)
     {
         // Resolve every destination before any mutation, including files absent from the snapshot.
         foreach (var name in ManagedFiles.Concat(OriginalFiles)) ResolveFile(name);
         DataProtectionPaths.RequireSafe(paths.DataRoot, Path.Combine(paths.DataRoot, "settings.json"));
         var before = await CaptureAsync(ct);
+        var files = PrepareRestoreFiles(before, archivedFiles);
         if (!HasEffectiveChanges(before, files)) return;
-        await SaveAutomaticBackupAsync(before, reason, ct, protectedBackupId);
         var changed = new List<string>();
         var settingsChanged = false;
         try
@@ -223,6 +236,9 @@ public sealed class UserDataBackupService : IUserDataBackupService
             foreach (var target in DataProtectionPaths.PayloadTargets)
             {
                 var name = "originals/" + target;
+                var changesPayload = files.TryGetValue("bin/" + target, out var payload) &&
+                    (!before.TryGetValue("bin/" + target, out var oldPayload) || !payload.AsSpan().SequenceEqual(oldPayload));
+                if (!changesPayload && !files.ContainsKey(name)) continue;
                 if (File.Exists(paths.OriginalFile(target))) continue;
                 if (files.TryGetValue(name, out var original))
                     await DataProtectionPaths.WriteAsync(paths.DataRoot, paths.OriginalFile(target), original, ct);
@@ -231,22 +247,34 @@ public sealed class UserDataBackupService : IUserDataBackupService
             }
             foreach (var name in ManagedFiles)
             {
+                if (!files.TryGetValue(name, out var value)) continue;
                 before.TryGetValue(name, out var old);
-                files.TryGetValue(name, out var value);
-                if (old is null && value is null || old is not null && value is not null && old.AsSpan().SequenceEqual(value)) continue;
+                if (old is not null && old.AsSpan().SequenceEqual(value)) continue;
                 await ApplyFileAsync(name, value, ct);
                 changed.Add(name);
             }
-            settingsChanged = true;
-            await settingsStore.SaveAsync(ValidateSettings(files["settings.json"]), ct);
+            if (!before["settings.json"].AsSpan().SequenceEqual(files["settings.json"]))
+            {
+                settingsChanged = true;
+                await settingsStore.SaveAsync(ValidateSettings(files["settings.json"]), ct);
+            }
         }
         catch (Exception failure)
         {
             var rollbackFailures = new List<Exception>();
+            var failedPayloadRollbacks = new HashSet<string>(StringComparer.Ordinal);
             foreach (var name in changed.AsEnumerable().Reverse())
             {
+                // If the active payload cannot be rolled back, retain its newly
+                // preserved original instead of deleting the remaining recovery data.
+                if (name.StartsWith("originals/", StringComparison.Ordinal) && !before.ContainsKey(name) &&
+                    failedPayloadRollbacks.Contains("bin/" + name["originals/".Length..])) continue;
                 try { await ApplyFileAsync(name, before.GetValueOrDefault(name), CancellationToken.None); }
-                catch (Exception ex) { rollbackFailures.Add(ex); }
+                catch (Exception ex)
+                {
+                    rollbackFailures.Add(ex);
+                    if (name.StartsWith("bin/", StringComparison.Ordinal)) failedPayloadRollbacks.Add(name);
+                }
             }
             if (settingsChanged)
             {
@@ -254,7 +282,7 @@ public sealed class UserDataBackupService : IUserDataBackupService
                 catch (Exception ex) { rollbackFailures.Add(ex); }
             }
             if (rollbackFailures.Count > 0)
-                throw new AggregateException("Restore failed; the pre-operation backup is available for recovery.", new[] { failure }.Concat(rollbackFailures));
+                throw new AggregateException("Не удалось полностью отменить восстановление. Исходный архив сохранён без изменений.", new[] { failure }.Concat(rollbackFailures));
             throw;
         }
     }
@@ -262,13 +290,40 @@ public sealed class UserDataBackupService : IUserDataBackupService
     private static bool SnapshotsEqual(Dictionary<string, byte[]> first, Dictionary<string, byte[]> second) =>
         first.Count == second.Count && first.All(pair => second.TryGetValue(pair.Key, out var bytes) && pair.Value.AsSpan().SequenceEqual(bytes));
 
+    private static Dictionary<string, byte[]> PrepareRestoreFiles(Dictionary<string, byte[]> before, Dictionary<string, byte[]> archivedFiles)
+    {
+        var files = new Dictionary<string, byte[]>(archivedFiles, StringComparer.Ordinal);
+        foreach (var name in PersonalLists)
+            if (files.TryGetValue(name, out var archived) && !HasListEntries(archived) &&
+                before.TryGetValue(name, out var current) && HasListEntries(current)) files.Remove(name);
+
+        var settings = JsonNode.Parse(before["settings.json"])!.AsObject();
+        foreach (var property in JsonNode.Parse(files["settings.json"])!.AsObject())
+            settings[property.Key] = property.Value?.DeepClone();
+        files["settings.json"] = JsonSerializer.SerializeToUtf8Bytes(
+            ValidateSettings(JsonSerializer.SerializeToUtf8Bytes(settings, JsonOptions)), JsonOptions);
+        return files;
+    }
+
+    private static bool HasListEntries(byte[] bytes)
+    {
+        using var stream = new MemoryStream(bytes, writable: false);
+        using var reader = new StreamReader(stream, Encoding.UTF8, detectEncodingFromByteOrderMarks: true);
+        while (reader.ReadLine() is { } line)
+        {
+            var value = line.Trim();
+            if (value.Length > 0 && !value.StartsWith('#')) return true;
+        }
+        return false;
+    }
+
     private static bool HasEffectiveChanges(Dictionary<string, byte[]> before, Dictionary<string, byte[]> files)
     {
         foreach (var name in ManagedFiles)
         {
+            if (!files.TryGetValue(name, out var value)) continue;
             before.TryGetValue(name, out var old);
-            files.TryGetValue(name, out var value);
-            if (old is null ? value is not null : value is null || !old.AsSpan().SequenceEqual(value)) return true;
+            if (old is null || !old.AsSpan().SequenceEqual(value)) return true;
         }
         if (OriginalFiles.Any(name => !before.ContainsKey(name) && files.ContainsKey(name))) return true;
         var settings = JsonSerializer.SerializeToUtf8Bytes(ValidateSettings(files["settings.json"]), JsonOptions);
@@ -298,7 +353,7 @@ public sealed class UserDataBackupService : IUserDataBackupService
             }
             await WriteAutomaticIndexAsync(backups, ct);
         }
-        // Retention must not turn a completed save/restore into a reported failure.
+        // Retention must not turn a completed backup into a reported failure.
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidOperationException or OperationCanceledException) { }
     }
 

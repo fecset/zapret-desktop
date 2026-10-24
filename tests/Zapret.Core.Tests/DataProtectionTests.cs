@@ -28,12 +28,12 @@ public sealed class DataProtectionTests
         Assert.Equal("mode=all\ntcp=443\nudp=5000\n", await File.ReadAllTextAsync(fixture.File("utils/game_filter.enabled")));
         Assert.Equal("1.2.3.0/24\n", await File.ReadAllTextAsync(fixture.File("lists/ipset-all.txt.backup")));
         Assert.Equal(new byte[] { 1, 2, 3 }, await File.ReadAllBytesAsync(fixture.File("bin/ACTIVE_GAME_UDP.bin")));
-        Assert.False(File.Exists(fixture.File("lists/ipset-exclude-user.txt")));
-        Assert.Single(await fixture.Service.GetBackupsAsync());
+        Assert.Equal("8.8.8.8\n", await File.ReadAllTextAsync(fixture.File("lists/ipset-exclude-user.txt")));
+        Assert.Empty(await fixture.Service.GetBackupsAsync());
     }
 
     [Fact]
-    public async Task RestoringSelectedBackupRetainsTheStateBeforeRestore()
+    public async Task RestoringSelectedBackupDoesNotCreateAnotherCopy()
     {
         using var fixture = new BackupFixture();
         await fixture.PopulateAsync();
@@ -42,11 +42,8 @@ public sealed class DataProtectionTests
         await fixture.Service.RestoreAsync(first.Id);
         Assert.Equal("my.example\r\n", await File.ReadAllTextAsync(fixture.File("lists/list-general-user.txt")));
         var backups = await fixture.Service.GetBackupsAsync();
-        Assert.Equal(2, backups.Count);
+        Assert.Single(backups);
         Assert.Contains(backups, x => x.Id == first.Id && x.Reason == "before edit" && x.FileCount > 3 && x.SizeBytes > 0);
-        var previous = Assert.Single(backups, x => x.Id != first.Id);
-        await fixture.Service.RestoreAsync(previous.Id);
-        Assert.Equal("changed.example\n", await File.ReadAllTextAsync(fixture.File("lists/list-general-user.txt")));
         Assert.False(Directory.Exists(fixture.File("backups")));
     }
 
@@ -103,7 +100,7 @@ public sealed class DataProtectionTests
         await Assert.ThrowsAnyAsync<IOException>(() => fixture.Service.ImportAsync(archive));
         Assert.Equal("changed.example\n", await File.ReadAllTextAsync(fixture.File("lists/list-general-user.txt")));
         Assert.Equal("Light", (await fixture.Settings.LoadAsync()).Theme);
-        Assert.Single(await fixture.Service.GetBackupsAsync());
+        Assert.Empty(await fixture.Service.GetBackupsAsync());
     }
 
     [Fact]
@@ -172,12 +169,12 @@ public sealed class DataProtectionTests
         await File.WriteAllTextAsync(fixture.File("lists/list-general-user.txt"), "changed.example\n");
         await fixture.Service.RestoreAsync(selected.Id);
         var afterRestore = await fixture.Service.GetBackupsAsync();
-        Assert.Equal(51, afterRestore.Count);
+        Assert.Equal(50, afterRestore.Count);
         Assert.Contains(afterRestore, x => x.Id == selected.Id);
         Assert.Equal("my.example\r\n", await File.ReadAllTextAsync(fixture.File("lists/list-general-user.txt")));
         await fixture.Service.CreateAsync("next operation");
         var afterCreation = await fixture.Service.GetBackupsAsync();
-        Assert.Equal(52, afterCreation.Count);
+        Assert.Equal(51, afterCreation.Count);
         Assert.Contains(afterCreation, x => x.Id == selected.Id);
     }
 

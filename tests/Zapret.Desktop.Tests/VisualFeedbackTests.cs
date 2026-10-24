@@ -191,7 +191,7 @@ public sealed class VisualFeedbackTests
             Assert.Equal("Добавить IP", AutomationProperties.GetName(Find(window, "Добавить IP")));
             Assert.Equal("Удалить выбранное", AutomationProperties.GetName(Find(window, "Удалить выбранное")));
         }
-        finally { window.Hide(); }
+        finally { await WaitAsync(() => !app.ViewModel.Busy); window.Hide(); }
     }
 
     private static void AssertLoading(Button button)

@@ -62,7 +62,7 @@ public sealed class BackupPolicyTests
     }
 
     [Fact]
-    public async Task RestoreProtectsItsSelectedAutomaticArchiveAndThePreOperationSnapshot()
+    public async Task RestoreDoesNotCreateOrPruneAutomaticArchives()
     {
         using var fixture = new BackupFixture();
         await fixture.SetStateAsync(0);
@@ -80,16 +80,13 @@ public sealed class BackupPolicyTests
         var backups = await fixture.Service.GetBackupsAsync();
         Assert.Equal(10, backups.Count);
         Assert.Contains(backups, x => x.Id == selected.Id);
-        Assert.DoesNotContain(backups, x => x.Id == automatic[0].Id);
-        var previous = Assert.Single(backups, x => x.Reason == "before restore");
+        Assert.All(automatic, copy => Assert.Contains(backups, x => x.Id == copy.Id));
+        Assert.DoesNotContain(backups, x => x.Reason == "before restore");
         Assert.Equal("state0.example\n", await File.ReadAllTextAsync(fixture.ListFile));
-        await fixture.Service.RestoreAsync(previous.Id);
-        Assert.Equal("state10.example\n", await File.ReadAllTextAsync(fixture.ListFile));
-        Assert.Contains(await fixture.Service.GetBackupsAsync(), x => x.Id == previous.Id);
     }
 
     [Fact]
-    public async Task ImportReusesAValidPreOperationSnapshotThatCanRestoreThePreviousState()
+    public async Task ImportPreservesExistingCopiesWithoutCreatingANewOne()
     {
         using var fixture = new BackupFixture();
         await fixture.SetStateAsync(0);
@@ -124,7 +121,7 @@ public sealed class BackupPolicyTests
     }
 
     [Fact]
-    public async Task ImportRejectsAnInvalidCurrentFilterBeforeChangingStateOrSavingAnUnreadableRecoveryCopy()
+    public async Task ImportRepairsAnInvalidCurrentFilterWithoutCreatingAnotherCopy()
     {
         using var fixture = new BackupFixture();
         await fixture.SetStateAsync(0);
@@ -135,10 +132,10 @@ public sealed class BackupPolicyTests
         await File.WriteAllTextAsync(fixture.FilterFile, "mode=all\ncommand=unsafe\n");
         archive.Position = 0;
 
-        await Assert.ThrowsAsync<InvalidDataException>(() => fixture.Service.ImportAsync(archive));
+        await fixture.Service.ImportAsync(archive);
 
-        Assert.Equal("state1.example\n", await File.ReadAllTextAsync(fixture.ListFile));
-        Assert.Equal("mode=all\ncommand=unsafe\n", await File.ReadAllTextAsync(fixture.FilterFile));
+        Assert.Equal("state0.example\n", await File.ReadAllTextAsync(fixture.ListFile));
+        Assert.Equal("mode=all\n", await File.ReadAllTextAsync(fixture.FilterFile));
         Assert.False(Directory.Exists(Path.Combine(fixture.DataDirectory, "backups")));
     }
 

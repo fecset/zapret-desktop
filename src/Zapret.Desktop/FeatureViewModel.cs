@@ -99,7 +99,7 @@ public sealed partial class MainViewModel
         await Required(backups).ImportAsync(source);
         await ConfirmRecoveryAsync();
         await ReloadUserDataAsync(resetDraft: true);
-        Message = "Данные импортированы; предыдущая версия сохранена в резервной копии";
+        Message = "Данные импортированы";
     });
     public Task RestoreBackupAsync(string id) => RunAsync(async () =>
     {
