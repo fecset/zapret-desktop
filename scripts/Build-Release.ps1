@@ -16,6 +16,11 @@ $Version = $Version.TrimStart('v')
 if ($Version -notmatch '^\d+\.\d+\.\d+$' -or $Version -ne $projectVersion) {
     throw "Release version must match the Desktop project version ($projectVersion)."
 }
+& git --no-optional-locks -C $repositoryRoot diff --quiet --no-ext-diff --no-textconv HEAD -- zapret
+if ($LASTEXITCODE -eq 1) {
+    throw 'Tracked zapret files differ from HEAD. Review the local changes before building a release; no files were changed.'
+}
+if ($LASTEXITCODE -ne 0) { throw 'Cannot verify tracked distribution files against HEAD.' }
 if (-not $OutputDirectory) { $OutputDirectory = Join-Path $repositoryRoot 'dist' }
 $outputRoot = [IO.Path]::GetFullPath($OutputDirectory)
 [IO.Directory]::CreateDirectory($outputRoot) | Out-Null
@@ -85,7 +90,7 @@ try {
     }
     foreach ($required in @('Zapret.Desktop.exe', 'LICENSE', 'THIRD_PARTY_NOTICES.md', 'README.md',
         'licenses/Zapret-LICENSE.txt', 'licenses/WinDivert-LICENSE.txt', 'licenses/Avalonia-LICENSE.md',
-        'licenses/DotNet-LICENSE.txt', 'licenses/Inter-OFL.txt', 'licenses/FluentIcons-LICENSE.txt',
+        'licenses/DotNet-LICENSE.txt', 'licenses/Runtime-NOTICES.txt', 'licenses/Inter-OFL.txt', 'licenses/FluentIcons-LICENSE.txt',
         'licenses/Cygwin-LICENSE.txt', 'licenses/LGPL-3.0.txt', 'licenses/GPL-3.0.txt',
         'zapret/service.bat', 'zapret/bin/winws.exe', 'zapret/bin/WinDivert.dll', 'zapret/bin/WinDivert64.sys',
         'zapret/lists/list-general.txt', 'zapret/utils/test zapret.ps1')) {
