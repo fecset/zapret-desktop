@@ -10,7 +10,6 @@ Zapret Desktop — проект [fecset](https://github.com/fecset/zapret-deskto
 
 ![Главная страница Zapret Desktop](UI.png)
 
-
 ## ▶️ Первый запуск
 
 1. Откройте [Releases](https://github.com/fecset/zapret-desktop/releases) и скачайте архив для Windows x64.
