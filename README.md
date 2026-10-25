@@ -56,7 +56,7 @@
 
 ## 🛠️ Сборка из исходников
 
-Понадобятся Windows x64 и .NET 10 SDK.
+Понадобятся Windows x64, .NET 10 SDK и Git.
 
 ```powershell
 dotnet restore ZapretDesktop.slnx
