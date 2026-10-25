@@ -16,6 +16,7 @@ public sealed partial class MainViewModel(IZapretDistribution distribution, IStr
     IConnectionHealthService? connection = null, IStrategyHistoryService? history = null) : ObservableObject
 {
     private DesktopSettings settings = new();
+    private bool settingsSavePending;
     private ZapretStrategy? selectedStrategy;
     private ZapretStatus? status;
     private GameFilterSettings game = new(GameFilterMode.Disabled, "1024-65535", "1024-65535");
@@ -266,12 +267,39 @@ public sealed partial class MainViewModel(IZapretDistribution distribution, IStr
     public Task SaveSettingsAsync() => RunAsync(async () =>
     {
         var updated = Draft.ToSettings(settings);
-        if (updated.StartWithWindows == settings.StartWithWindows && updated.StartZapretOnLaunch == settings.StartZapretOnLaunch &&
+        if (!settingsSavePending && updated.StartWithWindows == settings.StartWithWindows && updated.StartZapretOnLaunch == settings.StartZapretOnLaunch &&
             updated.MinimizeToTray == settings.MinimizeToTray && updated.CheckUpdates == settings.CheckUpdates &&
             updated.CheckConnectionAfterStart == settings.CheckConnectionAfterStart && updated.Theme == settings.Theme)
         { Message = "Настройки не изменились"; return; }
-        startup.SetEnabled(updated.StartWithWindows);
-        await settingsStore.SaveAsync(updated);
+        var previousStartup = startup.IsEnabled();
+        try
+        {
+            startup.SetEnabled(updated.StartWithWindows);
+            await settingsStore.SaveAsync(updated);
+        }
+        catch (Exception failure)
+        {
+            // A partial registration or failed rollback can leave the system different
+            // from the saved JSON. Keep retries enabled even after refreshing the UI.
+            settingsSavePending = true;
+            var failures = new List<Exception> { failure };
+            try { startup.SetEnabled(previousStartup); }
+            catch (Exception rollback) { failures.Add(rollback); }
+            try
+            {
+                settings.StartWithWindows = startup.IsEnabled();
+                Draft.StartWithWindows = settings.StartWithWindows;
+                OnPropertyChanged(nameof(Settings));
+            }
+            catch (Exception refresh)
+            {
+                failures.Add(new InvalidOperationException("Не удалось проверить фактическое состояние автозапуска.", refresh));
+            }
+            if (failures.Count > 1)
+                throw new AggregateException("Не удалось сохранить настройки. Проверьте состояние автозапуска и повторите сохранение.", failures);
+            throw;
+        }
+        settingsSavePending = false;
         settings = updated;
         OnPropertyChanged(nameof(Settings));
         Message = "Настройки сохранены";
