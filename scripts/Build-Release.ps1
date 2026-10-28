@@ -7,6 +7,8 @@ param(
 
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
+Add-Type -AssemblyName System.IO.Compression
+Add-Type -AssemblyName System.IO.Compression.FileSystem
 $repositoryRoot = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..'))
 $projectPath = Join-Path $repositoryRoot 'src/Zapret.Desktop/Zapret.Desktop.csproj'
 [xml]$project = Get-Content -LiteralPath $projectPath -Raw
@@ -110,11 +112,21 @@ try {
     if ((Get-Item -LiteralPath (Join-Path $publishRoot 'Zapret.Desktop.exe')).Length -lt 10MB) {
         throw 'The Desktop executable is unexpectedly small for a self-contained single-file build.'
     }
-    [IO.Compression.ZipFile]::CreateFromDirectory($publishRoot, $zipPath, [IO.Compression.CompressionLevel]::Optimal, $false)
+    $archiveStream = [IO.Compression.ZipFile]::Open($zipPath, [IO.Compression.ZipArchiveMode]::Create)
+    try {
+        # .NET Framework writes '\' into entry names; releases use forward slashes.
+        foreach ($file in Get-ChildItem -LiteralPath $publishRoot -File -Recurse) {
+            $relative = $file.FullName.Substring($publishRoot.Length + 1).Replace('\', '/')
+            [IO.Compression.ZipFileExtensions]::CreateEntryFromFile($archiveStream, $file.FullName, $relative,
+                [IO.Compression.CompressionLevel]::Optimal) | Out-Null
+        }
+    }
+    finally { $archiveStream.Dispose() }
     $archive = [IO.Compression.ZipFile]::OpenRead($zipPath)
     try {
-        if ($archive.Entries.Count -lt 10 -or -not ($archive.Entries.FullName -contains 'Zapret.Desktop.exe') -or
-            -not ($archive.Entries.FullName -contains 'zapret/bin/winws.exe')) { throw 'Release ZIP verification failed.' }
+        $entryNames = @($archive.Entries | ForEach-Object { $_.FullName.Replace('\', '/') })
+        if ($entryNames.Count -lt 10 -or -not ($entryNames -contains 'Zapret.Desktop.exe') -or
+            -not ($entryNames -contains 'zapret/bin/winws.exe')) { throw 'Release ZIP verification failed.' }
     }
     finally { $archive.Dispose() }
     $hash = (Get-FileHash -LiteralPath $zipPath -Algorithm SHA256).Hash.ToLowerInvariant()

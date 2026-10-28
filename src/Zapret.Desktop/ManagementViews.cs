@@ -1,4 +1,5 @@
 using Avalonia;
+using Avalonia.Automation;
 using Avalonia.Controls;
 using Avalonia.Controls.Templates;
 using Avalonia.Input.Platform;
@@ -187,7 +188,6 @@ public sealed partial class MainWindow
         FilterSettings();
         AppSettings();
         UpdateSettings();
-        ManagedUpdateSettings();
         NetworkDataSettings();
         BackupSettings();
         FakeSettings();
@@ -300,23 +300,89 @@ public sealed partial class MainWindow
     }
     private void UpdateSettings()
     {
-        var stack = new StackPanel { Spacing = 10 };
-        stack.Children.Add(Text("Обновления zapret и Zapret Desktop", 17, FontWeight.SemiBold));
-        stack.Children.Add(Text("Новые версии проверяются на GitHub. Страницу выпуска можно открыть отдельной кнопкой.", 12, color: MutedBrush));
+        var stack = new StackPanel { Spacing = 12 };
+        stack.Children.Add(Text("Обновления", 17, FontWeight.SemiBold));
+        stack.Children.Add(Text("Проверьте новые версии и установите обновление одной кнопкой. Пользовательские списки и настройки сохраняются.", 12, color: MutedBrush));
         updateCheckButton = Button("Проверить обновления", CheckForUpdatesAsync, isLoading: () => vm.CheckingUpdates);
         stack.Children.Add(updateCheckButton);
-        upstreamUpdateStatus = Text("", 12);
-        desktopUpdateStatus = Text("", 12);
-        stack.Children.Add(upstreamUpdateStatus);
-        stack.Children.Add(desktopUpdateStatus);
-        var releases = new WrapPanel { ItemSpacing = 8, LineSpacing = 8 };
-        upstreamReleaseButton = Button("Открыть выпуск zapret", () => OpenReleaseAsync(vm.UpstreamUpdate, "Flowseal/zapret-discord-youtube"));
-        desktopReleaseButton = Button("Открыть выпуск Desktop", () => OpenReleaseAsync(vm.DesktopUpdate, "fecset/zapret-desktop"));
-        releases.Children.Add(upstreamReleaseButton);
-        releases.Children.Add(desktopReleaseButton);
-        stack.Children.Add(releases);
+        if (vm.PreparingData)
+        {
+            var preparation = new StackPanel { Spacing = 8 };
+            preparation.Children.Add(Text(vm.PreparationMessage, 12, color: MutedBrush));
+            updateProgressBar = new ProgressBar
+            {
+                Minimum = 0, Maximum = 100, Height = 8,
+                IsIndeterminate = vm.PreparationIndeterminate,
+                Value = (vm.PreparationProgress ?? 0) * 100
+            };
+            preparation.Children.Add(updateProgressBar);
+            var progressLine = new Grid { ColumnDefinitions = new ColumnDefinitions("*,Auto") };
+            updateProgressStage = Text("", 12, color: MutedBrush);
+            progressLine.Children.Add(updateProgressStage);
+            updateProgressPercent = Text("", 12, FontWeight.SemiBold, AccentBrush);
+            Grid.SetColumn(updateProgressPercent, 1);
+            progressLine.Children.Add(updateProgressPercent);
+            preparation.Children.Add(progressLine);
+            preparation.Children.Add(Button("Отменить подготовку", () => { vm.CancelPreparation(); return Task.CompletedTask; }));
+            stack.Children.Add(new Border
+            {
+                Child = preparation,
+                Padding = new Thickness(14),
+                Background = Brush(IsLight ? "#F6F2FF" : "#1D1929"),
+                BorderBrush = Brush(IsLight ? "#D8CCFF" : "#3A3157"),
+                BorderThickness = new Thickness(1),
+                CornerRadius = new CornerRadius(12)
+            });
+            RefreshUpdateProgress();
+        }
+        stack.Children.Add(UpdateProductRow("zapret",
+            vm.DistributionUpdatePlan, vm.LastDistributionUpdate,
+            "Обновить zapret", "Установить zapret",
+            async () =>
+            {
+                await vm.UpdateDistributionAsync();
+                if (currentPage == "Настройки") Show("Настройки");
+            },
+            out upstreamUpdateStatus, out upstreamUpdateButton, activityKey: "update:zapret"));
+        stack.Children.Add(UpdateProductRow("Zapret Desktop",
+            vm.DesktopUpdatePlan, null,
+            "Обновить Desktop", "Установить и перезапустить",
+            async () =>
+            {
+                if (await vm.UpdateDesktopAsync()) { CompleteExit(); return; }
+                if (currentPage == "Настройки") Show("Настройки");
+            },
+            out desktopUpdateStatus, out desktopUpdateButton, activityKey: "update:desktop"));
         RefreshUpdateDisplay();
-        page.Children.Add(Panel(stack));
+        updateSettingsPanel = Panel(stack);
+        AutomationProperties.SetAutomationId(updateSettingsPanel, "UpdatesPanel");
+        page.Children.Add(updateSettingsPanel);
+    }
+
+    private Control UpdateProductRow(string product,
+        ManagedUpdatePlan? plan, ManagedUpdateResult? result, string updateLabel, string installLabel,
+        Func<Task> primaryAction, out TextBlock status, out Button primary, string? activityKey = null)
+    {
+        var info = new StackPanel { Spacing = 5 };
+        info.Children.Add(Text(product, 14, FontWeight.SemiBold));
+        status = Text("", 12, color: MutedBrush);
+        info.Children.Add(status);
+        if (plan is not null) info.Children.Add(Text(plan.Summary, 12, color: MutedBrush));
+        if (result is not null) info.Children.Add(Text(result.Summary, 12, color: GoodBrush));
+
+        var actions = new WrapPanel { ItemSpacing = 8, LineSpacing = 8, VerticalAlignment = VerticalAlignment.Center };
+        primary = IconButton(plan is null ? updateLabel : installLabel, FluentIcons.Download, primaryAction,
+            primary: true, activityKey: activityKey);
+        primary.IsEnabled = !vm.PreparingData;
+        actions.Children.Add(primary);
+
+        var row = new Grid { ColumnDefinitions = new ColumnDefinitions("*,Auto"), ColumnSpacing = 12 };
+        AutomationProperties.SetAutomationId(row, "UpdateRow:" + product);
+        row.Children.Add(info);
+        Grid.SetColumn(actions, 1);
+        actions.VerticalAlignment = VerticalAlignment.Center;
+        row.Children.Add(actions);
+        return row;
     }
     private void FakeSettings()
     {

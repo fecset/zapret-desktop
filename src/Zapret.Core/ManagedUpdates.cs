@@ -12,6 +12,10 @@ public sealed record ManagedUpdatePlan(string Id, ManagedUpdateProduct Product, 
 public sealed record ManagedUpdateResult(string Id, string Version, string InstalledDirectory,
     string BackupDirectory, string Summary);
 
+/// <summary>Progress of a managed update preparation. A null fraction means indeterminate.</summary>
+public sealed record ManagedUpdateProgress(string Stage, double? Fraction,
+    long BytesReceived = 0, long? TotalBytes = null);
+
 public sealed record DesktopUpdateSchedule(string HelperPath, string LogPath, string BackupDirectory,
     string Summary);
 
@@ -53,8 +57,10 @@ public sealed record DataUpdateResult(string TargetPath, string? BackupPath, str
 /// <summary>The caller must stop winws, the service and strategy tests before applying an update.</summary>
 public interface IManagedUpdateService
 {
-    Task<ManagedUpdatePlan> PrepareDistributionAsync(CancellationToken cancellationToken = default);
-    Task<ManagedUpdatePlan> PrepareDesktopAsync(string localVersion, CancellationToken cancellationToken = default);
+    Task<ManagedUpdatePlan> PrepareDistributionAsync(IProgress<ManagedUpdateProgress>? progress = null,
+        CancellationToken cancellationToken = default);
+    Task<ManagedUpdatePlan> PrepareDesktopAsync(string localVersion, IProgress<ManagedUpdateProgress>? progress = null,
+        CancellationToken cancellationToken = default);
     Task<ManagedUpdateResult> ApplyDistributionAsync(ManagedUpdatePlan plan, CancellationToken cancellationToken = default);
     Task RollbackDistributionAsync(ManagedUpdateResult result, CancellationToken cancellationToken = default);
     Task<DesktopUpdateSchedule> ScheduleDesktopUpdateAsync(ManagedUpdatePlan plan, int currentProcessId,

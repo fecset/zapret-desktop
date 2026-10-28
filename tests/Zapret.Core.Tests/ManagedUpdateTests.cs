@@ -45,6 +45,19 @@ public sealed class ManagedUpdateTests : IDisposable
         Assert.Equal("8.8.8.8/32\n", File.ReadAllText(Path.Combine(DistributionRoot, "lists", "ipset-all.txt")));
     }
 
+    [Fact]
+    public async Task PrepareReportsDownloadExtractionAndCompletionProgress()
+    {
+        using var client = Client(Zip(DistributionFiles()));
+        var service = Service(client);
+        var reports = new List<ManagedUpdateProgress>();
+        var plan = await service.PrepareDistributionAsync(new InlineProgress<ManagedUpdateProgress>(reports.Add));
+        Assert.Equal("1.11.0", plan.Version);
+        Assert.Contains(reports, x => x.Stage == "Загрузка обновления" && x.BytesReceived > 0);
+        Assert.Contains(reports, x => x.Stage == "Распаковка");
+        Assert.Equal(1.0, reports[^1].Fraction);
+    }
+
     [Theory]
     [InlineData("../escape.txt")]
     [InlineData("bin/../escape.txt")]
@@ -543,6 +556,11 @@ public sealed class ManagedUpdateTests : IDisposable
         Assert.Contains("/Flowseal/zapret-discord-youtube/refs/heads/main/.service/", request.RequestUri.AbsolutePath);
         return new HttpResponseMessage(HttpStatusCode.OK) { Content = new StringContent(content) };
     }));
+
+    private sealed class InlineProgress<T>(Action<T> report) : IProgress<T>
+    {
+        public void Report(T value) => report(value);
+    }
 
     private sealed class Handler(Func<HttpRequestMessage, HttpResponseMessage> respond) : HttpMessageHandler
     {

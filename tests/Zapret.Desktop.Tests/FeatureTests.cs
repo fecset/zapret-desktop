@@ -27,14 +27,52 @@ public sealed class FeatureTests
         }
     }
 
+    [Fact]
+    public async Task OneClickDistributionUpdateStopsAndRestartsRunningEngine()
+    {
+        using var app = new TestApplication(managedUpdates: new MemoryUpdates());
+        await app.ViewModel.InitializeAsync();
+        app.Process.NormalState = ZapretRunState.Running;
+        app.Process.DriverState = "Running";
+        await app.ViewModel.UpdateDistributionAsync();
+        Assert.Equal(1, app.Process.StopCalls);
+        Assert.Equal(1, app.Process.StartCalls);
+        Assert.NotNull(app.ViewModel.LastDistributionUpdate);
+        Assert.Equal(ZapretRunState.Running, app.ViewModel.Status?.State);
+    }
+
+    [Fact]
+    public async Task ApplyingDistributionUpdateRetiresTheAvailableUpdate()
+    {
+        using var app = new TestApplication(managedUpdates: new MemoryUpdates(), updateService: new AvailableUpdates());
+        await app.ViewModel.InitializeAsync();
+        await app.ViewModel.CheckUpdatesAsync();
+        Assert.True(app.ViewModel.UpstreamUpdate!.Available);
+        await app.ViewModel.UpdateDistributionAsync();
+        Assert.False(app.ViewModel.UpstreamUpdate!.Available);
+        Assert.Equal("test", app.ViewModel.UpstreamUpdate.LocalVersion);
+        Assert.Equal("test", app.ViewModel.LastDistributionUpdate!.Version);
+    }
+
+    private sealed class AvailableUpdates : IUpdateService
+    {
+        public Task<UpdateInfo> CheckUpstreamAsync(CancellationToken cancellationToken = default) =>
+            Task.FromResult(new UpdateInfo("zapret", "old", "test",
+                "https://github.com/Flowseal/zapret-discord-youtube/releases/tag/test", true));
+        public Task<UpdateInfo> CheckDesktopAsync(string localVersion, CancellationToken cancellationToken = default) =>
+            Task.FromResult(new UpdateInfo("Desktop", localVersion, localVersion, "", false));
+    }
+
     private sealed class MemoryUpdates : IManagedUpdateService
     {
-        public Task<ManagedUpdatePlan> PrepareDistributionAsync(CancellationToken cancellationToken = default) =>
+        public Task<ManagedUpdatePlan> PrepareDistributionAsync(IProgress<ManagedUpdateProgress>? progress = null,
+            CancellationToken cancellationToken = default) =>
             Task.FromResult(new ManagedUpdatePlan("test", ManagedUpdateProduct.Distribution, "test", "", "", 0, "", 0, "", "test"));
         public Task<ManagedUpdateResult> ApplyDistributionAsync(ManagedUpdatePlan plan, CancellationToken cancellationToken = default) =>
             Task.FromResult(new ManagedUpdateResult("test", "test", "", "", "test"));
         public Task RollbackDistributionAsync(ManagedUpdateResult result, CancellationToken cancellationToken = default) => Task.CompletedTask;
-        public Task<ManagedUpdatePlan> PrepareDesktopAsync(string localVersion, CancellationToken cancellationToken = default) => throw new NotSupportedException();
+        public Task<ManagedUpdatePlan> PrepareDesktopAsync(string localVersion,
+            IProgress<ManagedUpdateProgress>? progress = null, CancellationToken cancellationToken = default) => throw new NotSupportedException();
         public Task<DesktopUpdateSchedule> ScheduleDesktopUpdateAsync(ManagedUpdatePlan plan, int currentProcessId, CancellationToken cancellationToken = default) => throw new NotSupportedException();
         public Task<IpSetUpdatePlan> PrepareIpSetAsync(CancellationToken cancellationToken = default) => throw new NotSupportedException();
         public Task<DataUpdateResult> ApplyIpSetAsync(IpSetUpdatePlan plan, CancellationToken cancellationToken = default) => throw new NotSupportedException();

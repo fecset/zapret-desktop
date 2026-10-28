@@ -33,7 +33,7 @@ internal static class DesktopUpdateHelper
         {
             ProcessId = currentProcessId, ProcessStartTicks = process.StartTime.ToUniversalTime().Ticks.ToString(System.Globalization.CultureInfo.InvariantCulture),
             Source = plan.PreparedDirectory, Target = applicationDirectory, Replacement = replacement, Backup = backup,
-            Log = log, Ready = ready, Hashes = hashes
+            Log = log, Ready = ready, Hashes = hashes, Relaunch = true
         };
         await File.WriteAllTextAsync(manifest, JsonSerializer.Serialize(job), new UTF8Encoding(false), ct);
         await File.WriteAllTextAsync(helper, Script, new UTF8Encoding(false), ct);
@@ -60,7 +60,7 @@ internal static class DesktopUpdateHelper
             await Task.Delay(100, CancellationToken.None);
         }
         return new(helper, log, backup,
-            $"Подготовлено обновление Desktop {plan.Version}. Закройте приложение: помощник дождётся его выхода, сохранит пользовательские файлы и заменит каталог. Затем запустите Desktop снова. Результат: {log}");
+            $"Подготовлено обновление Desktop {plan.Version}. Приложение закроется, установит обновление и запустится снова. Результат: {log}");
     }
 
     internal static DirectorySecurity JobSecurity()
@@ -206,6 +206,11 @@ internal static class DesktopUpdateHelper
             [IO.Directory]::Move($job.Replacement, $job.Target)
             $movedNew = $true
             [IO.File]::WriteAllText($job.Log, "SUCCESS: Desktop updated. Backup: $($job.Backup)")
+            $relaunch = $job.PSObject.Properties['Relaunch']
+            if ($null -ne $relaunch -and $relaunch.Value) {
+                try { Start-Process -FilePath (Join-Path $job.Target 'Zapret.Desktop.exe') -WorkingDirectory $job.Target }
+                catch { [IO.File]::AppendAllText($job.Log, "`r`nRelaunch failed: $($_.Exception.Message)") }
+            }
             exit 0
         }
         catch {

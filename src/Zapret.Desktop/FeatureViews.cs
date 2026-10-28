@@ -97,37 +97,6 @@ public sealed partial class MainWindow
         page.Children.Add(Panel(stack));
     }
 
-    private void ManagedUpdateSettings()
-    {
-        var stack = new StackPanel { Spacing = 10 };
-        stack.Children.Add(Text("Установка обновлений", 17, FontWeight.SemiBold));
-        stack.Children.Add(Text("Сначала загрузите и проверьте обновление, затем установите его. Пользовательские данные сохраняются; предыдущий zapret доступен для отката.", 12, color: MutedBrush));
-        if (vm.PreparingData)
-        {
-            stack.Children.Add(Text(vm.PreparationMessage, 13, color: WarnBrush));
-            stack.Children.Add(Button("Отменить подготовку", () => { vm.CancelPreparation(); return Task.CompletedTask; }));
-        }
-        var row = new WrapPanel { Orientation = Orientation.Horizontal };
-        AddFeatureAction(row, "Загрузить zapret", vm.PrepareDistributionUpdateAsync);
-        if (vm.DistributionUpdatePlan is { } distributionPlan)
-        {
-            stack.Children.Add(Text(distributionPlan.Summary + $" · {distributionPlan.FileCount} файлов · {distributionPlan.Size / 1024 / 1024:N1} МБ", 12));
-            AddFeatureAction(row, "Установить zapret", vm.ApplyDistributionUpdateAsync);
-        }
-        if (vm.LastDistributionUpdate is not null) AddFeatureAction(row, "Откатить zapret", vm.RollbackDistributionUpdateAsync);
-        AddFeatureAction(row, "Загрузить Desktop", vm.PrepareDesktopUpdateAsync);
-        if (vm.DesktopUpdatePlan is { } desktopPlan)
-        {
-            stack.Children.Add(Text(desktopPlan.Summary, 12));
-            AddFeatureAction(row, "Установить Desktop и выйти", async () =>
-            {
-                if (await vm.InstallDesktopUpdateForExitAsync()) CompleteExit();
-            });
-        }
-        stack.Children.Add(row);
-        page.Children.Add(Panel(stack));
-    }
-
     private void NetworkDataSettings()
     {
         var stack = new StackPanel { Spacing = 10 };

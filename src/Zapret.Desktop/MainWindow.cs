@@ -2,6 +2,7 @@ using System.ComponentModel;
 using System.Collections;
 using System.Diagnostics;
 using Avalonia;
+using Avalonia.Automation;
 using Avalonia.Controls;
 using Avalonia.Controls.ApplicationLifetimes;
 using Avalonia.Controls.Templates;
@@ -28,13 +29,20 @@ public sealed partial class MainWindow : Window
     private TextBlock footer = new();
     private Grid feedbackPanel = new();
     private TextBlock sidebarStatus = new();
+    private TextBlock? sidebarUpstreamVersion;
     private TextBlock? upstreamUpdateStatus;
     private TextBlock? desktopUpdateStatus;
     private TextBlock? updateNotice;
+    private TextBlock? updateNoticeDetails;
     private Border? updateNoticePanel;
+    private Border? updateSettingsPanel;
     private Button? updateCheckButton;
-    private Button? upstreamReleaseButton;
-    private Button? desktopReleaseButton;
+    private Button? upstreamUpdateButton;
+    private Button? desktopUpdateButton;
+    private Button? updateWhatsNewButton;
+    private ProgressBar? updateProgressBar;
+    private TextBlock? updateProgressStage;
+    private TextBlock? updateProgressPercent;
     private readonly Dictionary<string, TextBlock> strategyResultLabels = new(StringComparer.OrdinalIgnoreCase);
     private Border? strategySummaryPanel;
     private TextBlock? strategySummaryText;
@@ -151,6 +159,8 @@ public sealed partial class MainWindow : Window
             }
             sidebarStatus.Text = vm.StatusText;
             sidebarStatusDot.Background = CurrentStatusBrush();
+            if (e.PropertyName == nameof(MainViewModel.UpstreamVersion) && sidebarUpstreamVersion is not null)
+                sidebarUpstreamVersion.Text = $"zapret {vm.UpstreamVersion}";
             if (e.PropertyName == nameof(MainViewModel.Busy)) RefreshEngineControls();
             if (e.PropertyName == nameof(MainViewModel.PreparingData) && currentPage == "Настройки") Show(currentPage);
             if (e.PropertyName == nameof(MainViewModel.FiltersNeedRestart) && currentPage == "Настройки") Show(currentPage);
@@ -159,6 +169,9 @@ public sealed partial class MainWindow : Window
             if (e.PropertyName is nameof(MainViewModel.UpstreamUpdate) or nameof(MainViewModel.DesktopUpdate)
                 or nameof(MainViewModel.CheckingUpdates) or nameof(MainViewModel.UpdateError))
                 RefreshUpdateDisplay();
+            if (e.PropertyName is nameof(MainViewModel.PreparationProgress) or nameof(MainViewModel.PreparationStage)
+                or nameof(MainViewModel.PreparationDetail))
+                RefreshUpdateProgress();
             if (e.PropertyName == nameof(MainViewModel.SelectedStrategy) && currentPage is "Главная" or "Стратегии")
                 Show(currentPage);
             else if (e.PropertyName is nameof(MainViewModel.StrategyTestSummary) or nameof(MainViewModel.StrategyChecks)
@@ -218,6 +231,8 @@ public sealed partial class MainWindow : Window
         online.Children.Add(sidebarStatus);
         sideFoot.Children.Add(online);
         sideFoot.Children.Add(new TextBlock { Text = $"Zapret Desktop {vm.DesktopVersion}", Foreground = MutedBrush, FontSize = 12 });
+        sidebarUpstreamVersion = new TextBlock { Text = $"zapret {vm.UpstreamVersion}", Foreground = MutedBrush, FontSize = 12 };
+        sideFoot.Children.Add(sidebarUpstreamVersion);
         sideFoot.Children.Add(new TextBlock { Text = "Автор: fecset · Основа: bol-van, Flowseal", Foreground = MutedBrush, FontSize = 11,
             TextWrapping = TextWrapping.Wrap });
         Grid.SetRow(sideFoot, 2);
@@ -320,6 +335,35 @@ public sealed partial class MainWindow : Window
         await vm.CheckUpdatesAsync();
     }
 
+    private Task OpenUpdatesAsync()
+    {
+        Show("Настройки");
+        ScrollUpdatesToCenter();
+        return Task.CompletedTask;
+    }
+
+    private void ScrollUpdatesToCenter()
+    {
+        if (updateSettingsPanel is null) return;
+        contentScroll.UpdateLayout();
+        var origin = updateSettingsPanel.TranslatePoint(new Point(0, 0), page);
+        if (origin is null) return;
+        var viewport = contentScroll.Viewport.Height;
+        var extent = contentScroll.Extent.Height;
+        var panelHeight = updateSettingsPanel.Bounds.Height;
+        var target = origin.Value.Y - Math.Max(0, (viewport - panelHeight) / 2);
+        contentScroll.Offset = new Vector(0, Math.Clamp(target, 0, Math.Max(0, extent - viewport)));
+    }
+
+    private Task OpenReleaseNotesAsync()
+    {
+        var update = vm.DesktopUpdate?.Available == true ? vm.DesktopUpdate : vm.UpstreamUpdate;
+        if (update is null) return Task.CompletedTask;
+        var repository = update.Product.Contains("Desktop", StringComparison.OrdinalIgnoreCase)
+            ? "fecset/zapret-desktop" : "Flowseal/zapret-discord-youtube";
+        return OpenReleaseAsync(update, repository);
+    }
+
     private Task OpenReleaseAsync(UpdateInfo? update, string repository)
     {
         if (update is null) return Task.CompletedTask;
@@ -327,19 +371,21 @@ public sealed partial class MainWindow : Window
             url.Host != "github.com" || url.Port != 443 || url.UserInfo.Length != 0 ||
             !url.AbsolutePath.StartsWith($"/{repository}/releases/", StringComparison.Ordinal))
         {
-            vm.ReportError("Не удалось открыть выпуск", new InvalidOperationException("Недоверенный адрес выпуска."));
+            vm.ReportError("Не удалось открыть «Что нового»", new InvalidOperationException("Недоверенный адрес страницы релиза."));
             return Task.CompletedTask;
         }
         try { openReleasePage(url); }
-        catch (Exception ex) { vm.ReportError("Не удалось открыть страницу выпуска", ex); }
+        catch (Exception ex) { vm.ReportError("Не удалось открыть страницу релиза", ex); }
         return Task.CompletedTask;
     }
 
     private void RefreshUpdateDisplay()
     {
         if (updateCheckButton is not null) updateCheckButton.IsEnabled = !vm.CheckingUpdates;
-        if (upstreamReleaseButton is not null) upstreamReleaseButton.IsVisible = vm.UpstreamUpdate is not null;
-        if (desktopReleaseButton is not null) desktopReleaseButton.IsVisible = vm.DesktopUpdate is not null;
+        if (upstreamUpdateButton is not null)
+            upstreamUpdateButton.IsVisible = vm.DistributionUpdatePlan is not null || vm.UpstreamUpdate?.Available == true;
+        if (desktopUpdateButton is not null)
+            desktopUpdateButton.IsVisible = vm.DesktopUpdatePlan is not null || vm.DesktopUpdate?.Available == true;
         if (upstreamUpdateStatus is not null)
         {
             upstreamUpdateStatus.Text = UpdateStatus("zapret", vm.UpstreamUpdate);
@@ -352,17 +398,46 @@ public sealed partial class MainWindow : Window
             desktopUpdateStatus.Foreground = vm.DesktopUpdate?.Available == true ? WarnBrush :
                 vm.DesktopUpdate is null ? MutedBrush : GoodBrush;
         }
-        var available = new[] { vm.UpstreamUpdate, vm.DesktopUpdate }.Where(x => x?.Available == true)
-            .Select(x => $"{x!.Product} {x.LatestVersion}").ToArray();
+        var available = new[] { vm.UpstreamUpdate, vm.DesktopUpdate }.Where(x => x?.Available == true).ToArray();
         if (updateNoticePanel is not null) updateNoticePanel.IsVisible = available.Length > 0;
         if (updateNotice is not null)
-            updateNotice.Text = "Доступны обновления: " + string.Join(", ", available) + ". Подробнее на страницах выпусков GitHub.";
+            updateNotice.Text = available.Length > 1 ? "Доступны обновления" : "Доступно обновление";
+        if (updateNoticeDetails is not null)
+            updateNoticeDetails.Text = string.Join("\n", available.Select(x =>
+                $"{DisplayProduct(x!.Product)} {x.LocalVersion} → {x.LatestVersion}"));
+        if (updateWhatsNewButton is not null)
+        {
+            var notes = vm.DesktopUpdate?.Available == true ? vm.DesktopUpdate : vm.UpstreamUpdate;
+            updateWhatsNewButton.IsVisible = notes is not null;
+            if (notes is not null)
+                ToolTip.SetTip(updateWhatsNewButton, $"Что нового в {DisplayProduct(notes.Product)} {notes.LatestVersion}");
+        }
+        RefreshUpdateProgress();
     }
+
+    private void RefreshUpdateProgress()
+    {
+        if (updateProgressBar is null) return;
+        updateProgressBar.IsIndeterminate = vm.PreparationIndeterminate;
+        updateProgressBar.Value = (vm.PreparationProgress ?? 0) * 100;
+        if (updateProgressStage is not null)
+            updateProgressStage.Text = string.IsNullOrWhiteSpace(vm.PreparationDetail)
+                ? vm.PreparationStage
+                : vm.PreparationStage + " · " + vm.PreparationDetail;
+        if (updateProgressPercent is not null)
+        {
+            updateProgressPercent.Text = vm.PreparationProgress is { } progress ? $"{progress * 100:F0}%" : "";
+            updateProgressPercent.IsVisible = vm.PreparationProgress is not null;
+        }
+    }
+
+    private static string DisplayProduct(string product) =>
+        product.Equals("Desktop", StringComparison.OrdinalIgnoreCase) ? "Zapret Desktop" : product;
 
     private string UpdateStatus(string product, UpdateInfo? update) => update is null
         ? vm.CheckingUpdates ? $"{product}: проверка..." : vm.UpdateError ?? $"{product}: проверка ещё не выполнена"
-        : update.Available ? $"{product}: доступна версия {update.LatestVersion} — {update.ReleaseUrl}"
-        : $"{product}: установлена актуальная версия {update.LocalVersion}";
+        : update.Available ? $"{product}: установлена {update.LocalVersion} → доступна {update.LatestVersion}"
+        : $"{product}: установлена {update.LocalVersion} · актуальная версия";
 
     private void DetachPage()
     {
@@ -441,6 +516,30 @@ public sealed partial class MainWindow : Window
             BorderThickness = new Thickness(0), CornerRadius = new CornerRadius(8),
             FontSize = 14, FontWeight = FontWeight.SemiBold
         };
+        TrackButton(button, activityKey ?? currentPage + ":" + label, action, isLoading);
+        return button;
+    }
+
+    private Button IconButton(string label, Geometry icon, Func<Task> action,
+        bool primary = false, bool danger = false, string? activityKey = null, Func<bool>? isLoading = null)
+    {
+        var button = new ActionButton
+        {
+            Content = new PathIcon
+            {
+                Data = icon, Width = 20, Height = 20,
+                HorizontalAlignment = HorizontalAlignment.Center,
+                VerticalAlignment = VerticalAlignment.Center
+            },
+            Width = 44, Height = 40, MinWidth = 44, MinHeight = 40, Padding = new Thickness(0),
+            HorizontalContentAlignment = HorizontalAlignment.Center,
+            VerticalContentAlignment = VerticalAlignment.Center,
+            Background = primary ? AccentBrush : danger ? Brush(IsLight ? "#FDE8E9" : "#40262A") : SurfaceRaisedBrush,
+            Foreground = primary ? Brushes.White : danger ? BadBrush : TextBrush,
+            BorderThickness = new Thickness(0), CornerRadius = new CornerRadius(8)
+        };
+        AutomationProperties.SetName(button, label);
+        ToolTip.SetTip(button, label);
         TrackButton(button, activityKey ?? currentPage + ":" + label, action, isLoading);
         return button;
     }

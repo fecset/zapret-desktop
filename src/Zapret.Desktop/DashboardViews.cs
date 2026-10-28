@@ -1,4 +1,5 @@
 using Avalonia;
+using Avalonia.Automation;
 using Avalonia.Controls;
 using Avalonia.Layout;
 using Avalonia.Media;
@@ -13,9 +14,55 @@ public sealed partial class MainWindow
         Heading("Главная", "Ваше подключение и всё важное — на одном экране.");
         foreach (var warning in vm.StartupWarnings)
             page.Children.Add(Panel(Text(warning, 12, color: WarnBrush), 12));
-        updateNotice = Text("", 13, FontWeight.SemiBold, WarnBrush);
-        updateNoticePanel = Panel(updateNotice, 14);
+        var updateIcon = new Border
+        {
+            Width = 44, Height = 44, CornerRadius = new CornerRadius(12),
+            Background = Brush(IsLight ? "#E9E2FF" : "#2A2340"),
+            VerticalAlignment = VerticalAlignment.Top,
+            Child = new PathIcon
+            {
+                Data = FluentIcons.Download, Width = 22, Height = 22,
+                Foreground = AccentBrush,
+                HorizontalAlignment = HorizontalAlignment.Center,
+                VerticalAlignment = VerticalAlignment.Center
+            }
+        };
+        updateNotice = Text("Доступно обновление", 15, FontWeight.SemiBold);
+        updateNoticeDetails = Text("", 13, color: MutedBrush);
+        var updateNoticeWords = new StackPanel { Spacing = 4 };
+        updateNoticeWords.Children.Add(updateNotice);
+        updateNoticeWords.Children.Add(updateNoticeDetails);
+        var updateNoticeHeadline = new Grid { ColumnDefinitions = new ColumnDefinitions("Auto,*") };
+        updateNoticeHeadline.Children.Add(updateIcon);
+        Grid.SetColumn(updateNoticeWords, 1);
+        updateNoticeWords.Margin = new Thickness(13, 0, 0, 0);
+        updateNoticeHeadline.Children.Add(updateNoticeWords);
+        var updateNoticeActions = new WrapPanel { ItemSpacing = 8, LineSpacing = 8 };
+        updateNoticeActions.Children.Add(Button("Открыть обновления", OpenUpdatesAsync, primary: true));
+        updateWhatsNewButton = Button("Что нового", OpenReleaseNotesAsync);
+        updateWhatsNewButton.Background = Brushes.Transparent;
+        updateWhatsNewButton.Foreground = AccentBrush;
+        updateWhatsNewButton.Padding = new Thickness(10, 8);
+        updateWhatsNewButton.BorderThickness = new Thickness(0);
+        updateNoticeActions.Children.Add(updateWhatsNewButton);
+        var updateNoticeContent = new StackPanel { Spacing = 12, Margin = new Thickness(14, 0, 0, 0) };
+        updateNoticeContent.Children.Add(updateNoticeHeadline);
+        updateNoticeContent.Children.Add(updateNoticeActions);
+        var updateNoticeBody = new Grid { ColumnDefinitions = new ColumnDefinitions("4,*") };
+        updateNoticeBody.Children.Add(new Border { Background = AccentBrush, CornerRadius = new CornerRadius(2) });
+        Grid.SetColumn(updateNoticeContent, 1);
+        updateNoticeBody.Children.Add(updateNoticeContent);
+        updateNoticePanel = new Border
+        {
+            Child = updateNoticeBody,
+            Padding = new Thickness(16),
+            Background = Brush(IsLight ? "#F6F2FF" : "#1D1929"),
+            BorderBrush = Brush(IsLight ? "#D8CCFF" : "#3A3157"),
+            BorderThickness = new Thickness(1),
+            CornerRadius = new CornerRadius(14)
+        };
         page.Children.Add(updateNoticePanel);
+        AutomationProperties.SetAutomationId(updateNoticePanel, "UpdateBanner");
         RefreshUpdateDisplay();
         var state = vm.Status?.State ?? ZapretRunState.Stopped;
         var running = state is ZapretRunState.Running or ZapretRunState.ServiceRunning;

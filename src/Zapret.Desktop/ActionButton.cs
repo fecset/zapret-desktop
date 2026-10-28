@@ -25,7 +25,11 @@ public sealed class ActionButton : Button
             spinner.Bind(IsVisibleProperty, new Binding(nameof(IsBusy)) { Source = this });
             spinner.Bind(LoadingSpinner.ForegroundProperty, new Binding(nameof(Foreground)) { Source = this });
             row.Children.Add(spinner);
-            row.Children.Add(new ContentControl { Content = value, VerticalAlignment = VerticalAlignment.Center });
+            var content = new ContentControl { Content = value, VerticalAlignment = VerticalAlignment.Center };
+            // Icon-only actions show the spinner instead of squeezing both into a square button.
+            if (value is not string)
+                content.Bind(IsVisibleProperty, new Binding("!IsBusy") { Source = this });
+            row.Children.Add(content);
             return row;
         });
     }

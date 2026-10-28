@@ -239,32 +239,107 @@ public sealed partial class MainViewModel
         Message = "Выбранная стратегия и текущие фильтры применены";
     }
     public Task PrepareDistributionUpdateAsync() => PrepareAsync("Загружаем и проверяем обновление zapret.",
-        token => Required(managedUpdates).PrepareDistributionAsync(token), plan =>
+        (progress, token) => Required(managedUpdates).PrepareDistributionAsync(progress, token), plan =>
     {
         DistributionUpdatePlan = plan;
         Message = "Обновление zapret загружено и проверено. Теперь его можно установить.";
     });
+    public async Task UpdateDistributionAsync()
+    {
+        if (DistributionUpdatePlan is null)
+        {
+            await PrepareDistributionUpdateAsync();
+            if (DistributionUpdatePlan is null || exitRequested) return;
+        }
+        await ApplyDistributionUpdateAsync();
+    }
     public Task ApplyDistributionUpdateAsync() => RunAsync(async () =>
     {
-        await RequireStoppedForFilesAsync(unloadDriver: true);
-        await BackupBeforeChangeAsync("Перед обновлением zapret");
-        LastDistributionUpdate = await Required(managedUpdates).ApplyDistributionAsync(
-            DistributionUpdatePlan ?? throw new InvalidOperationException("Сначала загрузите обновление zapret."));
-        DistributionUpdatePlan = null;
-        await ReloadUserDataAsync();
-        Message = LastDistributionUpdate.Summary;
+        var restart = await StopForUpdateAsync();
+        var restarted = true;
+        try
+        {
+            await BackupBeforeChangeAsync("Перед обновлением zapret");
+            var result = await Required(managedUpdates).ApplyDistributionAsync(
+                DistributionUpdatePlan ?? throw new InvalidOperationException("Сначала загрузите обновление zapret."));
+            LastDistributionUpdate = result;
+            DistributionUpdatePlan = null;
+            MarkDistributionInstalled(result.Version);
+            await ReloadUserDataAsync();
+        }
+        finally
+        {
+            if (restart.Any)
+            {
+                try { await RestartAfterUpdateAsync(restart); }
+                catch (Exception ex)
+                {
+                    restarted = false;
+                    Log("WARN", "Не удалось перезапустить Zapret после обновления: " + ex.Message);
+                }
+            }
+        }
+        Message = restarted ? LastDistributionUpdate.Summary :
+            LastDistributionUpdate.Summary + " Запустите Zapret вручную: автоматический перезапуск не удался.";
     });
+    private void MarkDistributionInstalled(string version)
+    {
+        if (UpstreamUpdate is null)
+        {
+            UpstreamUpdate = new UpdateInfo("zapret", version, version, "", false);
+            return;
+        }
+        UpstreamUpdate = UpstreamUpdate with
+        {
+            LocalVersion = version,
+            Available = !string.Equals(version, UpstreamUpdate.LatestVersion, StringComparison.OrdinalIgnoreCase)
+        };
+    }
+    private readonly record struct UpdateRestartState(bool Process, bool Service)
+    {
+        public bool Any => Process || Service;
+    }
+    private async Task<UpdateRestartState> StopForUpdateAsync()
+    {
+        await tester.RecoverInterruptedTestAsync();
+        Status = await process.GetStatusAsync();
+        if (Status.State == ZapretRunState.External)
+            throw new InvalidOperationException("Остановите внешний экземпляр winws в приложении, которое его запустило.");
+        var restart = new UpdateRestartState(Status.State == ZapretRunState.Running,
+            Status.State == ZapretRunState.ServiceRunning);
+        Status = await process.StopAsync();
+        if (Status.State != ZapretRunState.Stopped)
+            throw new InvalidOperationException("Не удалось остановить Zapret и службу перед обновлением. Остановите их вручную и повторите.");
+        return restart;
+    }
+    private async Task RestartAfterUpdateAsync(UpdateRestartState state)
+    {
+        if (state.Service)
+        {
+            await service.StartAsync();
+            Status = await process.GetStatusAsync();
+            Log("INFO", "Служба Zapret запущена после обновления.");
+            return;
+        }
+        if (state.Process) await StartEngineCoreAsync();
+    }
     public Task RollbackDistributionUpdateAsync() => RunAsync(async () =>
     {
         await RequireStoppedForFilesAsync(unloadDriver: true);
-        await Required(managedUpdates).RollbackDistributionAsync(
-            LastDistributionUpdate ?? throw new InvalidOperationException("Нет обновления для отката."));
+        var result = LastDistributionUpdate ?? throw new InvalidOperationException("Нет обновления для отката.");
+        await Required(managedUpdates).RollbackDistributionAsync(result);
         LastDistributionUpdate = null;
         await ReloadUserDataAsync();
+        if (UpstreamUpdate is not null)
+            UpstreamUpdate = UpstreamUpdate with
+            {
+                LocalVersion = UpstreamVersion,
+                Available = !string.Equals(UpstreamVersion, UpstreamUpdate.LatestVersion, StringComparison.OrdinalIgnoreCase)
+            };
         Message = "Предыдущая версия zapret восстановлена";
     });
     public Task PrepareDesktopUpdateAsync() => PrepareAsync("Загружаем и проверяем обновление Desktop.",
-        token => Required(managedUpdates).PrepareDesktopAsync(DesktopVersion, token), plan =>
+        (progress, token) => Required(managedUpdates).PrepareDesktopAsync(DesktopVersion, progress, token), plan =>
     {
         DesktopUpdatePlan = plan;
         Message = "Обновление Desktop загружено и проверено. Установка выполняется после выхода.";
@@ -294,6 +369,15 @@ public sealed partial class MainViewModel
             ReportError("Не удалось запланировать обновление", ex);
             return false;
         }
+    }
+    public async Task<bool> UpdateDesktopAsync()
+    {
+        if (DesktopUpdatePlan is null)
+        {
+            await PrepareDesktopUpdateAsync();
+            if (DesktopUpdatePlan is null || exitRequested) return false;
+        }
+        return await InstallDesktopUpdateForExitAsync();
     }
     public Task PrepareIpSetUpdateAsync() => PrepareAsync("Загружаем список IP-адресов.",
         token => Required(managedUpdates).PrepareIpSetAsync(token), plan => IpSetUpdatePlan = plan);

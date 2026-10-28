@@ -55,15 +55,19 @@ public sealed class ManagedUpdateService : IManagedUpdateService
             Environment.GetFolderPath(Environment.SpecialFolder.Windows), "System32", "drivers", "etc", "hosts"));
     }
 
-    public Task<ManagedUpdatePlan> PrepareDistributionAsync(CancellationToken cancellationToken = default) =>
-        PrepareAsync(ManagedUpdateProduct.Distribution, distribution.Version, cancellationToken);
+    public Task<ManagedUpdatePlan> PrepareDistributionAsync(IProgress<ManagedUpdateProgress>? progress = null,
+        CancellationToken cancellationToken = default) =>
+        PrepareAsync(ManagedUpdateProduct.Distribution, distribution.Version, progress, cancellationToken);
 
-    public Task<ManagedUpdatePlan> PrepareDesktopAsync(string localVersion, CancellationToken cancellationToken = default) =>
-        PrepareAsync(ManagedUpdateProduct.Desktop, localVersion, cancellationToken);
+    public Task<ManagedUpdatePlan> PrepareDesktopAsync(string localVersion, IProgress<ManagedUpdateProgress>? progress = null,
+        CancellationToken cancellationToken = default) =>
+        PrepareAsync(ManagedUpdateProduct.Desktop, localVersion, progress, cancellationToken);
 
-    private async Task<ManagedUpdatePlan> PrepareAsync(ManagedUpdateProduct product, string? localVersion, CancellationToken ct)
+    private async Task<ManagedUpdatePlan> PrepareAsync(ManagedUpdateProduct product, string? localVersion,
+        IProgress<ManagedUpdateProgress>? progress, CancellationToken ct)
     {
         var repository = product == ManagedUpdateProduct.Distribution ? "Flowseal/zapret-discord-youtube" : "fecset/zapret-desktop";
+        progress?.Report(new ManagedUpdateProgress("Получение сведений о выпуске", null));
         var metadata = await DownloadAsync($"https://api.github.com/repos/{repository}/releases/latest", 1024 * 1024, false, ct);
         var release = JsonSerializer.Deserialize<Release>(metadata) ?? throw new InvalidDataException("GitHub release metadata is missing.");
         var version = release.Tag?.TrimStart('v', 'V');
@@ -84,7 +88,15 @@ public sealed class ManagedUpdateService : IManagedUpdateService
         if (asset.Size is <= 0 || asset.Size > limit) throw new InvalidDataException("Release asset size exceeds the download limit.");
         if (asset.Digest is null || !Regex.IsMatch(asset.Digest, "^sha256:[a-fA-F0-9]{64}$"))
             throw new InvalidDataException("The release asset does not provide a SHA-256 digest.");
-        var content = await DownloadAsync(asset.Url, limit, true, ct);
+        progress?.Report(new ManagedUpdateProgress("Загрузка обновления", 0.05, 0, asset.Size));
+        var content = await DownloadAsync(asset.Url, limit, true, ct, (received, total) =>
+        {
+            var fraction = total is > 0
+                ? 0.05 + 0.80 * Math.Clamp((double)received / total.Value, 0, 1)
+                : (double?)null;
+            progress?.Report(new ManagedUpdateProgress("Загрузка обновления", fraction, received, total));
+        });
+        progress?.Report(new ManagedUpdateProgress("Проверка подписи", 0.87));
         var hash = Hash(content);
         if (content.LongLength != asset.Size || !hash.Equals(asset.Digest[7..], StringComparison.OrdinalIgnoreCase))
             throw new InvalidDataException("The downloaded release does not match its GitHub size or SHA-256 digest.");
@@ -95,7 +107,9 @@ public sealed class ManagedUpdateService : IManagedUpdateService
         Directory.CreateDirectory(workspace);
         try
         {
-            await ExtractAsync(content, workspace, product == ManagedUpdateProduct.Distribution ? 256L * 1024 * 1024 : 1024L * 1024 * 1024, ct);
+            progress?.Report(new ManagedUpdateProgress("Распаковка", 0.90));
+            await ExtractAsync(content, workspace, product == ManagedUpdateProduct.Distribution ? 256L * 1024 * 1024 : 1024L * 1024 * 1024, ct,
+                fraction => progress?.Report(new ManagedUpdateProgress("Распаковка", 0.90 + 0.08 * fraction)));
             var preparedRoot = FindPackageRoot(workspace, product == ManagedUpdateProduct.Distribution ? "service.bat" : "Zapret.Desktop.exe");
             if (product == ManagedUpdateProduct.Distribution)
             {
@@ -111,9 +125,11 @@ public sealed class ManagedUpdateService : IManagedUpdateService
                 await ValidateDistributionAsync(Path.Combine(preparedRoot, "zapret"), ct);
             }
             var manifest = UpdateFiles.HashTree(preparedRoot, ct);
+            progress?.Report(new ManagedUpdateProgress("Проверка файлов", 0.99));
             var plan = new ManagedUpdatePlan(id, product, version!, release.Url, asset.Url, content.LongLength, hash,
                 manifest.Count, preparedRoot, $"{version}: {manifest.Count} файлов, {content.LongLength / (1024d * 1024):F1} МБ. Пользовательские файлы будут сохранены; предыдущая версия останется в резервной копии.");
             updates[id] = new(plan, manifest);
+            progress?.Report(new ManagedUpdateProgress("Готово", 1.0));
             return plan;
         }
         catch
@@ -339,7 +355,8 @@ public sealed class ManagedUpdateService : IManagedUpdateService
         return prepared;
     }
 
-    private async Task<byte[]> DownloadAsync(string url, long limit, bool releaseAsset, CancellationToken ct)
+    private async Task<byte[]> DownloadAsync(string url, long limit, bool releaseAsset, CancellationToken ct,
+        Action<long, long?>? progress = null)
     {
         using var timeout = CancellationTokenSource.CreateLinkedTokenSource(ct);
         timeout.CancelAfter(TimeSpan.FromMinutes(5));
@@ -368,7 +385,23 @@ public sealed class ManagedUpdateService : IManagedUpdateService
             if (response.Content.Headers.ContentLength > limit) throw new InvalidDataException("The download exceeds the allowed size.");
             await using var input = await response.Content.ReadAsStreamAsync(timeout.Token);
             using var output = new MemoryStream();
-            await CopyBoundedAsync(input, output, limit, timeout.Token);
+            var total = response.Content.Headers.ContentLength;
+            var buffer = new byte[81920];
+            long received = 0;
+            long lastReported = 0;
+            int read;
+            while ((read = await input.ReadAsync(buffer, timeout.Token)) > 0)
+            {
+                if (read > limit - received) throw new InvalidDataException("The download or extracted entry exceeds its size limit.");
+                await output.WriteAsync(buffer.AsMemory(0, read), timeout.Token);
+                received += read;
+                if (progress is not null && (received - lastReported >= 256 * 1024 || total is { } size && received == size))
+                {
+                    progress(received, total);
+                    lastReported = received;
+                }
+            }
+            progress?.Invoke(received, total);
             return output.ToArray();
         }
         throw new InvalidDataException("The download exceeded the redirect limit.");
@@ -385,16 +418,21 @@ public sealed class ManagedUpdateService : IManagedUpdateService
             throw new InvalidDataException("The release URL does not belong to the expected repository and version.");
     }
 
-    private static async Task ExtractAsync(byte[] content, string destination, long expandedLimit, CancellationToken ct)
+    private static async Task ExtractAsync(byte[] content, string destination, long expandedLimit, CancellationToken ct,
+        Action<double>? progress = null)
     {
         using var stream = new MemoryStream(content, writable: false);
         using var zip = new ZipArchive(stream, ZipArchiveMode.Read);
         if (zip.Entries.Count is 0 or > 5000) throw new InvalidDataException("The ZIP has an invalid number of entries.");
         var paths = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var reportEvery = Math.Max(1, zip.Entries.Count / 100);
+        var processed = 0;
         long total = 0;
         foreach (var entry in zip.Entries)
         {
             ct.ThrowIfCancellationRequested();
+            processed++;
+            if (processed % reportEvery == 0) progress?.Invoke(processed / (double)zip.Entries.Count);
             var name = entry.FullName.Replace('\\', '/');
             var directory = name.EndsWith('/');
             name = name.TrimEnd('/');
@@ -425,6 +463,7 @@ public sealed class ManagedUpdateService : IManagedUpdateService
             await CopyBoundedAsync(input, output, entry.Length, ct);
             if (output.Length != entry.Length) throw new InvalidDataException("A ZIP entry does not match its declared size.");
         }
+        progress?.Invoke(1);
     }
 
     private static string FindPackageRoot(string extracted, string required)

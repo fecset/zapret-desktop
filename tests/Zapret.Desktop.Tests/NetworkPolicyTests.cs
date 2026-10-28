@@ -11,7 +11,7 @@ namespace Zapret.Desktop.Tests;
 public sealed class NetworkPolicyTests
 {
     [AvaloniaFact]
-    public async Task ReleasePagesHaveAnExplicitActionAfterChecking()
+    public async Task ReleaseNotesHaveAnExplicitActionAfterChecking()
     {
         using var app = new TestApplication(updateService: new Updates());
         await app.Settings.SaveAsync(new DesktopSettings { CheckUpdates = false }, TestContext.Current.CancellationToken);
@@ -21,13 +21,10 @@ public sealed class NetworkPolicyTests
         try
         {
             await WaitAsync(() => app.ViewModel.Strategies.Count > 0 && !app.ViewModel.Busy);
-            window.GetLogicalDescendants().OfType<Button>().Single(b =>
-                b.GetLogicalDescendants().OfType<TextBlock>().Any(t => t.Text == "Настройки"))
-                .RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
             await app.ViewModel.CheckUpdatesAsync();
             Dispatcher.UIThread.RunJobs();
             Assert.Empty(opened);
-            var release = Assert.Single(window.GetLogicalDescendants().OfType<Button>(), b => b.Content as string == "Открыть выпуск Desktop");
+            var release = Assert.Single(window.GetLogicalDescendants().OfType<Button>(), b => b.Content as string == "Что нового");
             release.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
             Assert.Equal("https://github.com/fecset/zapret-desktop/releases/tag/v0.3.0", Assert.Single(opened).AbsoluteUri);
         }

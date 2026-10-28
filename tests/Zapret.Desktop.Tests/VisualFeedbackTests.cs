@@ -45,7 +45,7 @@ public sealed class VisualFeedbackTests
     [AvaloniaTheory]
     [InlineData(1180)]
     [InlineData(890)]
-    public async Task ReleaseButtonsHaveAVisibleGap(int width)
+    public async Task UpdateButtonsAppearOnlyWhenAnUpdateIsAvailable(int width)
     {
         using var app = new TestApplication(updateService: new PausedUpdates(paused: false));
         var window = await OpenAsync(app, width: width);
@@ -55,14 +55,272 @@ public sealed class VisualFeedbackTests
             await app.ViewModel.CheckUpdatesAsync();
             Dispatcher.UIThread.RunJobs();
             window.UpdateLayout();
-            var first = Find(window, "Открыть выпуск zapret");
-            var second = Find(window, "Открыть выпуск Desktop");
-            var firstEdge = first.TranslatePoint(new Point(first.Bounds.Width, 0), window)!.Value;
-            var secondStart = second.TranslatePoint(default, window)!.Value;
-            var gap = secondStart.Y > firstEdge.Y + 1
-                ? secondStart.Y - firstEdge.Y - first.Bounds.Height
-                : secondStart.X - firstEdge.X;
-            Assert.InRange(gap, 8, 32);
+            Assert.True(Find(window, "Обновить zapret").IsVisible);
+            Assert.True(Find(window, "Обновить Desktop").IsVisible);
+            Assert.IsType<PathIcon>(Find(window, "Обновить zapret").Content);
+            Assert.IsType<PathIcon>(Find(window, "Обновить Desktop").Content);
+            Assert.DoesNotContain(window.GetLogicalDescendants().OfType<Button>(),
+                b => (b.Content as string)?.StartsWith("Открыть выпуск", StringComparison.Ordinal) == true);
+        }
+        finally { window.Hide(); }
+    }
+
+    [AvaloniaFact]
+    public async Task UpdateActionsAreHiddenWhenEverythingIsUpToDate()
+    {
+        using var app = new TestApplication(updateService: new PausedUpdates(paused: false, available: false));
+        var window = await OpenAsync(app);
+        try
+        {
+            Navigate(window, "Настройки");
+            await app.ViewModel.CheckUpdatesAsync();
+            Dispatcher.UIThread.RunJobs();
+            Assert.False(Find(window, "Обновить zapret").IsVisible);
+            Assert.False(Find(window, "Обновить Desktop").IsVisible);
+            Assert.DoesNotContain(window.GetLogicalDescendants().OfType<Button>(),
+                b => (b.Content as string)?.StartsWith("Открыть выпуск", StringComparison.Ordinal) == true);
+        }
+        finally { window.Hide(); }
+    }
+
+    [AvaloniaTheory]
+    [InlineData(1180)]
+    [InlineData(890)]
+    public async Task UpdateActionSitsBesideTheProduct(int width)
+    {
+        using var app = new TestApplication(updateService: new PausedUpdates(paused: false));
+        var window = await OpenAsync(app, width: width);
+        try
+        {
+            await app.ViewModel.CheckUpdatesAsync();
+            Dispatcher.UIThread.RunJobs();
+            Navigate(window, "Настройки");
+            window.UpdateLayout();
+            var row = window.GetLogicalDescendants().OfType<Grid>()
+                .Single(g => AutomationProperties.GetAutomationId(g) == "UpdateRow:zapret");
+            var info = row.Children.OfType<StackPanel>().Single();
+            var button = Find(window, "Обновить zapret");
+            var infoOrigin = info.TranslatePoint(default, row)!.Value;
+            var buttonOrigin = button.TranslatePoint(default, row)!.Value;
+            Assert.True(buttonOrigin.X >= infoOrigin.X + info.Bounds.Width - 0.5,
+                $"Кнопка должна быть справа от текста: {buttonOrigin.X:0.#} vs {infoOrigin.X + info.Bounds.Width:0.#}");
+            var infoCenter = infoOrigin.Y + info.Bounds.Height / 2;
+            var buttonCenter = buttonOrigin.Y + button.Bounds.Height / 2;
+            Assert.InRange(Math.Abs(infoCenter - buttonCenter), 0, 2);
+        }
+        finally { window.Hide(); }
+    }
+
+    [AvaloniaFact]
+    public async Task ApplyingUpdateKeepsTheActionBusyAfterThePageRebuild()
+    {
+        var managed = new PausedManagedUpdates { PauseApply = true };
+        using var app = new TestApplication(
+            updateService: new PausedUpdates(paused: false, desktopAvailable: false), managedUpdates: managed);
+        var window = await OpenAsync(app);
+        try
+        {
+            await app.ViewModel.CheckUpdatesAsync();
+            Dispatcher.UIThread.RunJobs();
+            Navigate(window, "Настройки");
+            window.UpdateLayout();
+            Find(window, "Обновить zapret").RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+            await managed.Entered.Task.WaitAsync(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
+            managed.Release.TrySetResult();
+            await managed.ApplyEntered.Task.WaitAsync(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
+            await WaitAsync(() => !app.ViewModel.PreparingData);
+            Dispatcher.UIThread.RunJobs();
+            window.UpdateLayout();
+            var button = Assert.IsType<ActionButton>(Find(window, "Установить zapret"));
+            Assert.True(button.IsBusy);
+            Assert.False(button.IsEffectivelyEnabled);
+            Assert.NotNull(Spinner(button));
+            Assert.DoesNotContain(button.GetVisualDescendants().OfType<PathIcon>(), icon => icon.IsEffectivelyVisible);
+            managed.ApplyRelease.TrySetResult();
+            await WaitAsync(() => app.ViewModel.LastDistributionUpdate is not null && !app.ViewModel.Busy);
+            Dispatcher.UIThread.RunJobs();
+            window.UpdateLayout();
+            Assert.False(Find(window, "Обновить zapret").IsVisible);
+            Assert.DoesNotContain(window.GetVisualDescendants().OfType<LoadingSpinner>(),
+                spinner => spinner.IsEffectivelyVisible);
+        }
+        finally { window.Hide(); }
+    }
+
+    [AvaloniaFact]
+    public async Task InstalledUpdateRemovesTheActionAndBanner()
+    {
+        var managed = new PausedManagedUpdates();
+        using var app = new TestApplication(
+            updateService: new PausedUpdates(paused: false, desktopAvailable: false), managedUpdates: managed);
+        var window = await OpenAsync(app);
+        try
+        {
+            await app.ViewModel.CheckUpdatesAsync();
+            Dispatcher.UIThread.RunJobs();
+            Navigate(window, "Настройки");
+            window.UpdateLayout();
+            Find(window, "Обновить zapret").RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+            await managed.Entered.Task.WaitAsync(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
+            managed.Release.TrySetResult();
+            await WaitAsync(() => app.ViewModel.LastDistributionUpdate is not null &&
+                !app.ViewModel.PreparingData && !app.ViewModel.Busy);
+            Dispatcher.UIThread.RunJobs();
+            window.UpdateLayout();
+            Assert.False(app.ViewModel.UpstreamUpdate!.Available);
+            Assert.False(Find(window, "Обновить zapret").IsVisible);
+            Assert.DoesNotContain(window.GetVisualDescendants().OfType<LoadingSpinner>(),
+                spinner => spinner.IsEffectivelyVisible);
+            Navigate(window, "Главная");
+            window.UpdateLayout();
+            var banner = window.GetLogicalDescendants().OfType<Border>()
+                .Single(b => AutomationProperties.GetAutomationId(b) == "UpdateBanner");
+            Assert.False(banner.IsVisible);
+        }
+        finally { window.Hide(); }
+    }
+
+    [AvaloniaFact]
+    public void BusyIconButtonShowsOnlyTheSpinner()
+    {
+        var icon = new Border { Width = 20, Height = 20 };
+        var button = new ActionButton { Content = icon, Width = 44 };
+        var window = new Window { Content = button };
+        window.Show();
+        try
+        {
+            window.UpdateLayout();
+            Assert.True(icon.IsEffectivelyVisible);
+            button.IsBusy = true;
+            window.UpdateLayout();
+            Assert.False(icon.IsEffectivelyVisible);
+            Assert.True(button.GetLogicalDescendants().OfType<LoadingSpinner>().Single().IsVisible);
+            button.IsBusy = false;
+            window.UpdateLayout();
+            Assert.True(icon.IsEffectivelyVisible);
+            Assert.False(button.GetLogicalDescendants().OfType<LoadingSpinner>().Single().IsVisible);
+        }
+        finally { window.Close(); }
+    }
+
+    [AvaloniaFact]
+    public async Task UpdateBannerShowsVersionTransitionAndActions()
+    {
+        using var app = new TestApplication(updateService: new PausedUpdates(paused: false));
+        var window = await OpenAsync(app);
+        try
+        {
+            await app.ViewModel.CheckUpdatesAsync();
+            Dispatcher.UIThread.RunJobs();
+            window.UpdateLayout();
+            var texts = window.GetLogicalDescendants().OfType<TextBlock>()
+                .Select(t => t.Text ?? "").ToArray();
+            Assert.Contains("Доступны обновления", texts);
+            Assert.Contains(texts, t => t.Contains("Zapret Desktop") && t.Contains("0.3.0"));
+            Assert.True(Find(window, "Открыть обновления").IsVisible);
+            Assert.True(Find(window, "Что нового").IsVisible);
+            var banner = window.GetLogicalDescendants().OfType<Border>()
+                .Single(b => AutomationProperties.GetAutomationId(b) == "UpdateBanner");
+            Assert.DoesNotContain(banner.GetLogicalDescendants().OfType<Button>(),
+                b => b.Content as string == "Позже");
+            Assert.DoesNotContain(texts, t => t.Contains("Установите одной кнопкой"));
+        }
+        finally { window.Hide(); }
+    }
+
+    [AvaloniaTheory]
+    [InlineData(1180)]
+    [InlineData(890)]
+    public async Task UpdateBannerContentStaysInsideTheCard(int width)
+    {
+        using var app = new TestApplication(updateService: new PausedUpdates(paused: false));
+        var window = await OpenAsync(app, width: width);
+        try
+        {
+            await app.ViewModel.CheckUpdatesAsync();
+            Dispatcher.UIThread.RunJobs();
+            window.UpdateLayout();
+            var banner = window.GetLogicalDescendants().OfType<Border>()
+                .Single(b => AutomationProperties.GetAutomationId(b) == "UpdateBanner");
+            var innerRight = banner.Bounds.Width - banner.Padding.Right;
+            foreach (var text in banner.GetLogicalDescendants().OfType<TextBlock>())
+            {
+                var origin = text.TranslatePoint(default, banner)!.Value;
+                Assert.True(origin.X >= 0, $"«{text.Text}» выходит слева");
+                Assert.True(origin.X + text.Bounds.Width <= innerRight + 0.5,
+                    $"«{text.Text}» выходит справа: {origin.X + text.Bounds.Width:0.#} > {innerRight:0.#}");
+            }
+            var actions = banner.GetLogicalDescendants().OfType<Button>().ToArray();
+            Assert.All(actions, b =>
+            {
+                var origin = b.TranslatePoint(default, banner)!.Value;
+                Assert.True(origin.X + b.Bounds.Width <= innerRight + 0.5, $"Кнопка «{b.Content}» выходит справа");
+            });
+        }
+        finally { window.Hide(); }
+    }
+
+    [AvaloniaFact]
+    public async Task SidebarShowsBothVersions()
+    {
+        using var app = new TestApplication();
+        var window = await OpenAsync(app);
+        try
+        {
+            var texts = window.GetLogicalDescendants().OfType<TextBlock>().Select(t => t.Text ?? "").ToArray();
+            Assert.Contains(texts, t => t == $"Zapret Desktop {app.ViewModel.DesktopVersion}");
+            Assert.Contains(texts, t => t == $"zapret {app.ViewModel.UpstreamVersion}");
+        }
+        finally { window.Hide(); }
+    }
+
+    [AvaloniaFact]
+    public async Task OpeningUpdatesScrollsTheUpdateSectionToTheCenter()
+    {
+        using var app = new TestApplication(updateService: new PausedUpdates(paused: false));
+        var window = await OpenAsync(app);
+        try
+        {
+            await app.ViewModel.CheckUpdatesAsync();
+            Dispatcher.UIThread.RunJobs();
+            Find(window, "Открыть обновления").RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+            Dispatcher.UIThread.RunJobs();
+            window.UpdateLayout();
+            var scroll = window.GetLogicalDescendants().OfType<ScrollViewer>().First();
+            var panel = window.GetLogicalDescendants().OfType<Border>()
+                .Single(b => AutomationProperties.GetAutomationId(b) == "UpdatesPanel");
+            var content = (Visual)scroll.Content!;
+            var origin = panel.TranslatePoint(new Point(0, 0), content)!.Value;
+            var panelCenter = origin.Y + panel.Bounds.Height / 2;
+            var viewportCenter = scroll.Offset.Y + scroll.Viewport.Height / 2;
+            Assert.InRange(Math.Abs(panelCenter - viewportCenter), 0, 2);
+        }
+        finally { window.Hide(); }
+    }
+
+    [AvaloniaFact]
+    public async Task UpdatePreparationShowsProgressBarAndStage()
+    {
+        var updates = new PausedManagedUpdates();
+        using var app = new TestApplication(managedUpdates: updates);
+        var window = await OpenAsync(app);
+        try
+        {
+            Navigate(window, "Настройки");
+            var preparation = app.ViewModel.PrepareDistributionUpdateAsync();
+            await updates.Entered.Task.WaitAsync(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
+            updates.Report(new ManagedUpdateProgress("Загрузка обновления", 0.42, 10 * 1024, 24 * 1024));
+            await WaitAsync(() => Math.Abs((app.ViewModel.PreparationProgress ?? 0) - 0.42) < 0.001);
+            window.UpdateLayout();
+            var bar = window.GetLogicalDescendants().OfType<ProgressBar>().Single();
+            Assert.True(bar.IsVisible);
+            Assert.Equal(42, bar.Value, 3);
+            Assert.Contains(window.GetLogicalDescendants().OfType<TextBlock>().Select(t => t.Text ?? ""),
+                t => t.Contains("Загрузка обновления"));
+            updates.Release.TrySetResult();
+            await preparation;
+            Dispatcher.UIThread.RunJobs();
+            Assert.DoesNotContain(window.GetLogicalDescendants().OfType<ProgressBar>(), b => b.IsVisible);
         }
         finally { window.Hide(); }
     }
@@ -289,7 +547,8 @@ public sealed class VisualFeedbackTests
     }
     private static Control? Spinner(Button button) => button.GetVisualDescendants().OfType<Control>()
         .SingleOrDefault(c => AutomationProperties.GetAutomationId(c) == "operation-spinner" && c.IsEffectivelyVisible);
-    private static Button Find(Window window, string label) => window.GetLogicalDescendants().OfType<Button>().Single(b => b.Content as string == label);
+    private static Button Find(Window window, string label) => window.GetLogicalDescendants().OfType<Button>()
+        .Single(b => b.Content as string == label || AutomationProperties.GetName(b) == label);
     private static void Navigate(Window window, string page)
     {
         window.GetLogicalDescendants().OfType<Button>().Single(b => b.GetLogicalDescendants().OfType<TextBlock>().Any(t => t.Text == page))
@@ -316,7 +575,7 @@ public sealed class VisualFeedbackTests
         }
         Dispatcher.UIThread.RunJobs();
     }
-    private sealed class PausedUpdates(bool paused = true) : IUpdateService
+    private sealed class PausedUpdates(bool paused = true, bool available = true, bool? desktopAvailable = null) : IUpdateService
     {
         public TaskCompletionSource Entered { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
         public TaskCompletionSource Release { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -326,13 +585,55 @@ public sealed class VisualFeedbackTests
             UpstreamCalls++;
             Entered.TrySetResult();
             if (paused) await Release.Task.WaitAsync(cancellationToken);
-            return new("zapret", "1.10.4", "1.10.4", "https://github.com/Flowseal/zapret-discord-youtube/releases/tag/1.10.4", false);
+            return available
+                ? new("zapret", "1.10.4", "1.10.5", "https://github.com/Flowseal/zapret-discord-youtube/releases/tag/1.10.5", true)
+                : new("zapret", "1.10.4", "1.10.4", "https://github.com/Flowseal/zapret-discord-youtube/releases/tag/1.10.4", false);
         }
         public async Task<UpdateInfo> CheckDesktopAsync(string localVersion, CancellationToken cancellationToken = default)
         {
             if (paused) await Release.Task.WaitAsync(cancellationToken);
-            return new("Desktop", localVersion, localVersion, "https://github.com/fecset/zapret-desktop/releases/tag/v" + localVersion, false);
+            return (desktopAvailable ?? available)
+                ? new("Desktop", localVersion, "0.3.0", "https://github.com/fecset/zapret-desktop/releases/tag/v0.3.0", true)
+                : new("Desktop", localVersion, localVersion, "https://github.com/fecset/zapret-desktop/releases/tag/v" + localVersion, false);
         }
+    }
+    private sealed class PausedManagedUpdates : IManagedUpdateService
+    {
+        public TaskCompletionSource Entered { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public TaskCompletionSource Release { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public TaskCompletionSource ApplyEntered { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public TaskCompletionSource ApplyRelease { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public bool PauseApply { get; init; }
+        public void Report(ManagedUpdateProgress progress) => enteredProgress?.Report(progress);
+        private IProgress<ManagedUpdateProgress>? enteredProgress;
+        public async Task<ManagedUpdatePlan> PrepareDistributionAsync(IProgress<ManagedUpdateProgress>? progress = null,
+            CancellationToken cancellationToken = default)
+        {
+            enteredProgress = progress;
+            Entered.TrySetResult();
+            await Release.Task.WaitAsync(cancellationToken);
+            return new("test", ManagedUpdateProduct.Distribution, "1.10.5", "", "", 0, "", 0, "", "test");
+        }
+        public async Task<ManagedUpdateResult> ApplyDistributionAsync(ManagedUpdatePlan plan, CancellationToken cancellationToken = default)
+        {
+            ApplyEntered.TrySetResult();
+            if (PauseApply) await ApplyRelease.Task.WaitAsync(cancellationToken);
+            return new("test", "1.10.5", "", "", "test");
+        }
+        public Task RollbackDistributionAsync(ManagedUpdateResult result, CancellationToken cancellationToken = default) => Task.CompletedTask;
+        public Task<ManagedUpdatePlan> PrepareDesktopAsync(string localVersion,
+            IProgress<ManagedUpdateProgress>? progress = null, CancellationToken cancellationToken = default) =>
+            throw new NotSupportedException();
+        public Task<DesktopUpdateSchedule> ScheduleDesktopUpdateAsync(ManagedUpdatePlan plan, int currentProcessId,
+            CancellationToken cancellationToken = default) => throw new NotSupportedException();
+        public Task<IpSetUpdatePlan> PrepareIpSetAsync(CancellationToken cancellationToken = default) =>
+            throw new NotSupportedException();
+        public Task<DataUpdateResult> ApplyIpSetAsync(IpSetUpdatePlan plan, CancellationToken cancellationToken = default) =>
+            throw new NotSupportedException();
+        public Task<HostsUpdatePreview> PreviewHostsAsync(CancellationToken cancellationToken = default) =>
+            throw new NotSupportedException();
+        public Task<DataUpdateResult> ApplyHostsAsync(HostsUpdatePreview preview, CancellationToken cancellationToken = default) =>
+            throw new NotSupportedException();
     }
     private sealed class PausedDiagnostic : IDiagnosticService
     {

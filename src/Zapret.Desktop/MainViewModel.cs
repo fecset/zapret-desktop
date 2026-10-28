@@ -153,7 +153,8 @@ public sealed partial class MainViewModel(IZapretDistribution distribution, IStr
         IpSet = await filters.GetIpSetModeAsync();
         if (Status.State == ZapretRunState.Stopped) FiltersNeedRestart = false;
     });
-    public Task StartAsync() => RunEngineActionAsync(async () =>
+    public Task StartAsync() => RunEngineActionAsync(StartEngineCoreAsync);
+    private async Task StartEngineCoreAsync()
     {
         await tester.RecoverInterruptedTestAsync();
         if (SelectedStrategy is null) throw new InvalidOperationException("Выберите стратегию.");
@@ -162,7 +163,7 @@ public sealed partial class MainViewModel(IZapretDistribution distribution, IStr
         FiltersNeedRestart = false;
         Log("INFO", $"Запущена стратегия {SelectedStrategy.Name}; PID {Status.ProcessId}");
         Message = "Стратегия запущена";
-    });
+    }
     public Task StopAsync() => RunEngineActionAsync(async () =>
     {
         try
