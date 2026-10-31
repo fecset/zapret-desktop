@@ -96,7 +96,7 @@ public sealed class ManagedUpdateService : IManagedUpdateService
                 : (double?)null;
             progress?.Report(new ManagedUpdateProgress("Загрузка обновления", fraction, received, total));
         });
-        progress?.Report(new ManagedUpdateProgress("Проверка подписи", 0.87));
+        progress?.Report(new ManagedUpdateProgress("Проверка целостности", 0.87));
         var hash = Hash(content);
         if (content.LongLength != asset.Size || !hash.Equals(asset.Digest[7..], StringComparison.OrdinalIgnoreCase))
             throw new InvalidDataException("The downloaded release does not match its GitHub size or SHA-256 digest.");
@@ -215,6 +215,18 @@ public sealed class ManagedUpdateService : IManagedUpdateService
             return schedule;
         }
         finally { applyLock.Release(); }
+    }
+
+    public async Task<DesktopUpdateOutcome?> ReadDesktopUpdateOutcomeAsync(CancellationToken cancellationToken = default)
+    {
+        var path = applicationDirectory + ".update-result.json";
+        UpdateFiles.RequireNoLinks(path);
+        if (!File.Exists(path)) return null;
+        if (new FileInfo(path).Length > 64 * 1024) throw new InvalidDataException("Desktop update result exceeds its size limit.");
+        var outcome = JsonSerializer.Deserialize<DesktopUpdateOutcome>(await File.ReadAllTextAsync(path, cancellationToken))
+            ?? throw new InvalidDataException("Desktop update result is missing.");
+        File.Delete(path);
+        return outcome;
     }
 
     public async Task<IpSetUpdatePlan> PrepareIpSetAsync(CancellationToken cancellationToken = default)

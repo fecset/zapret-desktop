@@ -19,6 +19,8 @@ public sealed record ManagedUpdateProgress(string Stage, double? Fraction,
 public sealed record DesktopUpdateSchedule(string HelperPath, string LogPath, string BackupDirectory,
     string Summary);
 
+public sealed record DesktopUpdateOutcome(bool Success, string Version, string Detail);
+
 public sealed record IpSetUpdatePlan(string Id, string SourceUrl, string TargetPath, int EntryCount,
     long Size, string Sha256, string Content, string Summary);
 
@@ -57,6 +59,9 @@ public sealed record DataUpdateResult(string TargetPath, string? BackupPath, str
 /// <summary>The caller must stop winws, the service and strategy tests before applying an update.</summary>
 public interface IManagedUpdateService
 {
+    /// <summary>Consumes the last installation result, if this implementation installs Desktop updates.</summary>
+    Task<DesktopUpdateOutcome?> ReadDesktopUpdateOutcomeAsync(CancellationToken cancellationToken = default) =>
+        Task.FromResult<DesktopUpdateOutcome?>(null);
     Task<ManagedUpdatePlan> PrepareDistributionAsync(IProgress<ManagedUpdateProgress>? progress = null,
         CancellationToken cancellationToken = default);
     Task<ManagedUpdatePlan> PrepareDesktopAsync(string localVersion, IProgress<ManagedUpdateProgress>? progress = null,

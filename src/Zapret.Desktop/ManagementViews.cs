@@ -302,7 +302,13 @@ public sealed partial class MainWindow
     {
         var stack = new StackPanel { Spacing = 12 };
         stack.Children.Add(Text("Обновления", 17, FontWeight.SemiBold));
-        stack.Children.Add(Text("Проверьте новые версии и установите обновление одной кнопкой. Пользовательские списки и настройки сохраняются.", 12, color: MutedBrush));
+        stack.Children.Add(Text("Приложение и zapret обновляются отдельно. Ваши списки и настройки сохраняются.", 12, color: MutedBrush));
+        if (vm.DesktopUpdateOutcome is { } outcome)
+        {
+            stack.Children.Add(Text(outcome.Success ? $"Zapret Desktop {outcome.Version} обновлён" : "Обновление Zapret Desktop не установлено",
+                14, FontWeight.SemiBold, outcome.Success ? GoodBrush : BadBrush));
+            stack.Children.Add(Text(outcome.Detail, 12, color: MutedBrush));
+        }
         updateCheckButton = Button("Проверить обновления", CheckForUpdatesAsync, isLoading: () => vm.CheckingUpdates);
         stack.Children.Add(updateCheckButton);
         if (vm.PreparingData)
@@ -319,7 +325,7 @@ public sealed partial class MainWindow
             var progressLine = new Grid { ColumnDefinitions = new ColumnDefinitions("*,Auto") };
             updateProgressStage = Text("", 12, color: MutedBrush);
             progressLine.Children.Add(updateProgressStage);
-            updateProgressPercent = Text("", 12, FontWeight.SemiBold, AccentBrush);
+            updateProgressPercent = Text("", 12, FontWeight.SemiBold, AccentTextBrush);
             Grid.SetColumn(updateProgressPercent, 1);
             progressLine.Children.Add(updateProgressPercent);
             preparation.Children.Add(progressLine);
@@ -336,23 +342,23 @@ public sealed partial class MainWindow
             RefreshUpdateProgress();
         }
         stack.Children.Add(UpdateProductRow("zapret",
-            vm.DistributionUpdatePlan, vm.LastDistributionUpdate,
+            vm.DistributionUpdatePlan,
             "Обновить zapret", "Установить zapret",
             async () =>
             {
                 await vm.UpdateDistributionAsync();
                 if (currentPage == "Настройки") Show("Настройки");
             },
-            out upstreamUpdateStatus, out upstreamUpdateButton, activityKey: "update:zapret"));
+            out upstreamUpdateStatus, out upstreamUpdateButton, out upstreamReleaseNotesButton, activityKey: "update:zapret"));
         stack.Children.Add(UpdateProductRow("Zapret Desktop",
-            vm.DesktopUpdatePlan, null,
-            "Обновить Desktop", "Установить и перезапустить",
+            vm.DesktopUpdatePlan,
+            "Обновить и перезапустить Desktop", "Установить и перезапустить Desktop",
             async () =>
             {
                 if (await vm.UpdateDesktopAsync()) { CompleteExit(); return; }
                 if (currentPage == "Настройки") Show("Настройки");
             },
-            out desktopUpdateStatus, out desktopUpdateButton, activityKey: "update:desktop"));
+            out desktopUpdateStatus, out desktopUpdateButton, out desktopReleaseNotesButton, activityKey: "update:desktop"));
         RefreshUpdateDisplay();
         updateSettingsPanel = Panel(stack);
         AutomationProperties.SetAutomationId(updateSettingsPanel, "UpdatesPanel");
@@ -360,21 +366,31 @@ public sealed partial class MainWindow
     }
 
     private Control UpdateProductRow(string product,
-        ManagedUpdatePlan? plan, ManagedUpdateResult? result, string updateLabel, string installLabel,
-        Func<Task> primaryAction, out TextBlock status, out Button primary, string? activityKey = null)
+        ManagedUpdatePlan? plan, string updateLabel, string installLabel,
+        Func<Task> primaryAction, out TextBlock status, out Button primary, out Button releaseNotes, string? activityKey = null)
     {
         var info = new StackPanel { Spacing = 5 };
         info.Children.Add(Text(product, 14, FontWeight.SemiBold));
         status = Text("", 12, color: MutedBrush);
         info.Children.Add(status);
+        info.Children.Add(Text(product == "zapret"
+            ? "Работающий Zapret будет временно остановлен и запущен снова."
+            : "Приложение закроется и откроется снова. Установленный zapret сохранится.", 12, color: MutedBrush));
         if (plan is not null) info.Children.Add(Text(plan.Summary, 12, color: MutedBrush));
-        if (result is not null) info.Children.Add(Text(result.Summary, 12, color: GoodBrush));
 
         var actions = new WrapPanel { ItemSpacing = 8, LineSpacing = 8, VerticalAlignment = VerticalAlignment.Center };
-        primary = IconButton(plan is null ? updateLabel : installLabel, FluentIcons.Download, primaryAction,
+        primary = Button(plan is null ? updateLabel : installLabel, primaryAction,
             primary: true, activityKey: activityKey);
         primary.IsEnabled = !vm.PreparingData;
         actions.Children.Add(primary);
+        releaseNotes = Button("Что нового в " + product,
+            () => OpenReleaseAsync(product == "zapret" ? vm.UpstreamUpdate : vm.DesktopUpdate,
+                product == "zapret" ? "Flowseal/zapret-discord-youtube" : "fecset/zapret-desktop"));
+        releaseNotes.HorizontalAlignment = HorizontalAlignment.Left;
+        releaseNotes.Background = Brushes.Transparent;
+        releaseNotes.Padding = new Thickness(15, 8);
+        releaseNotes.FontSize = 12;
+        info.Children.Add(releaseNotes);
 
         var row = new Grid { ColumnDefinitions = new ColumnDefinitions("*,Auto"), ColumnSpacing = 12 };
         AutomationProperties.SetAutomationId(row, "UpdateRow:" + product);

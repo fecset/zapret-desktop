@@ -56,9 +56,11 @@ public sealed class VisualFeedbackTests
             Dispatcher.UIThread.RunJobs();
             window.UpdateLayout();
             Assert.True(Find(window, "Обновить zapret").IsVisible);
-            Assert.True(Find(window, "Обновить Desktop").IsVisible);
-            Assert.IsType<PathIcon>(Find(window, "Обновить zapret").Content);
-            Assert.IsType<PathIcon>(Find(window, "Обновить Desktop").Content);
+            Assert.True(Find(window, "Обновить и перезапустить Desktop").IsVisible);
+            Assert.Equal("Обновить zapret", Find(window, "Обновить zapret").Content);
+            Assert.Equal("Обновить и перезапустить Desktop", Find(window, "Обновить и перезапустить Desktop").Content);
+            Assert.Contains(window.GetLogicalDescendants().OfType<TextBlock>(),
+                text => text.Text == "Приложение закроется и откроется снова. Установленный zapret сохранится.");
             Assert.DoesNotContain(window.GetLogicalDescendants().OfType<Button>(),
                 b => (b.Content as string)?.StartsWith("Открыть выпуск", StringComparison.Ordinal) == true);
         }
@@ -76,9 +78,42 @@ public sealed class VisualFeedbackTests
             await app.ViewModel.CheckUpdatesAsync();
             Dispatcher.UIThread.RunJobs();
             Assert.False(Find(window, "Обновить zapret").IsVisible);
-            Assert.False(Find(window, "Обновить Desktop").IsVisible);
+            Assert.False(Find(window, "Обновить и перезапустить Desktop").IsVisible);
             Assert.DoesNotContain(window.GetLogicalDescendants().OfType<Button>(),
                 b => (b.Content as string)?.StartsWith("Открыть выпуск", StringComparison.Ordinal) == true);
+        }
+        finally { window.Hide(); }
+    }
+
+    [AvaloniaTheory]
+    [InlineData(1180, "Dark")]
+    [InlineData(890, "Dark")]
+    [InlineData(1180, "Light")]
+    [InlineData(890, "Light")]
+    public async Task UpdateRowsKeepVisibleActionsAndReleaseNotesInsideTheCard(int width, string theme)
+    {
+        using var app = new TestApplication(updateService: new PausedUpdates(paused: false));
+        var window = await OpenAsync(app, theme, width);
+        try
+        {
+            Navigate(window, "Настройки");
+            await app.ViewModel.CheckUpdatesAsync();
+            Dispatcher.UIThread.RunJobs();
+            window.UpdateLayout();
+            foreach (var product in new[] { "zapret", "Zapret Desktop" })
+            {
+                var row = window.GetLogicalDescendants().OfType<Grid>()
+                    .Single(g => AutomationProperties.GetAutomationId(g) == "UpdateRow:" + product);
+                Assert.True(Find(window, "Что нового в " + product).IsVisible);
+                foreach (var control in row.GetLogicalDescendants().OfType<Control>()
+                    .Where(control => control is Button or TextBlock))
+                {
+                    var origin = control.TranslatePoint(default, row)!.Value;
+                    Assert.InRange(origin.X, -0.5, row.Bounds.Width);
+                    Assert.True(origin.X + control.Bounds.Width <= row.Bounds.Width + 0.5,
+                        $"{theme}/{width}: {control} extends outside {product}");
+                }
+            }
         }
         finally { window.Hide(); }
     }
@@ -169,6 +204,10 @@ public sealed class VisualFeedbackTests
             window.UpdateLayout();
             Assert.False(app.ViewModel.UpstreamUpdate!.Available);
             Assert.False(Find(window, "Обновить zapret").IsVisible);
+            var productRow = window.GetLogicalDescendants().OfType<Grid>()
+                .Single(row => AutomationProperties.GetAutomationId(row) == "UpdateRow:zapret");
+            Assert.DoesNotContain(productRow.GetLogicalDescendants().OfType<TextBlock>(),
+                text => text.Text == app.ViewModel.LastDistributionUpdate!.Summary);
             Assert.DoesNotContain(window.GetVisualDescendants().OfType<LoadingSpinner>(),
                 spinner => spinner.IsEffectivelyVisible);
             Navigate(window, "Главная");
@@ -218,7 +257,7 @@ public sealed class VisualFeedbackTests
             Assert.Contains("Доступны обновления", texts);
             Assert.Contains(texts, t => t.Contains("Zapret Desktop") && t.Contains("0.3.0"));
             Assert.True(Find(window, "Открыть обновления").IsVisible);
-            Assert.True(Find(window, "Что нового").IsVisible);
+            Assert.True(Find(window, "Что нового в Zapret Desktop").IsVisible);
             var banner = window.GetLogicalDescendants().OfType<Border>()
                 .Single(b => AutomationProperties.GetAutomationId(b) == "UpdateBanner");
             Assert.DoesNotContain(banner.GetLogicalDescendants().OfType<Button>(),

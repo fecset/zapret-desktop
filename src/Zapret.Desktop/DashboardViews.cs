@@ -41,7 +41,7 @@ public sealed partial class MainWindow
         updateNoticeActions.Children.Add(Button("Открыть обновления", OpenUpdatesAsync, primary: true));
         updateWhatsNewButton = Button("Что нового", OpenReleaseNotesAsync);
         updateWhatsNewButton.Background = Brushes.Transparent;
-        updateWhatsNewButton.Foreground = AccentBrush;
+        updateWhatsNewButton.Foreground = AccentTextBrush;
         updateWhatsNewButton.Padding = new Thickness(10, 8);
         updateWhatsNewButton.BorderThickness = new Thickness(0);
         updateNoticeActions.Children.Add(updateWhatsNewButton);

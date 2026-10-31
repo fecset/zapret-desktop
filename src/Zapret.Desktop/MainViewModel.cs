@@ -144,6 +144,7 @@ public sealed partial class MainViewModel(IZapretDistribution distribution, IStr
         await LoadFeatureDataAsync();
         if (recovered && settings.StartZapretOnLaunch && SelectedStrategy is not null && Status?.State == ZapretRunState.Stopped)
             await StartAsync();
+        await ReadDesktopUpdateOutcomeAsync();
     }
     public Task RefreshAsync() => Busy || PreparingData ? Task.CompletedTask : RunAsync(async () =>
     {

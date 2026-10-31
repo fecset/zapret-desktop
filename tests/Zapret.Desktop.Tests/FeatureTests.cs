@@ -5,6 +5,39 @@ namespace Zapret.Desktop.Tests;
 
 public sealed class FeatureTests
 {
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task DistributionUpdateRefreshesInstalledServiceArguments(bool running)
+    {
+        string? strategyFile = null;
+        using var app = new TestApplication(managedUpdates: new MemoryUpdates(() =>
+            File.WriteAllText(strategyFile!, "start \"test\" /min \"%BIN%winws.exe\" --wf-tcp=8443")));
+        await app.ViewModel.InitializeAsync();
+        strategyFile = app.ViewModel.SelectedStrategy!.SourceFile;
+        await app.Service.InstallAsync(app.ViewModel.SelectedStrategy, TestContext.Current.CancellationToken);
+        if (!running) await app.Service.StopAsync(TestContext.Current.CancellationToken);
+        app.Process.BeforeStop = () => app.Service.StopAsync(TestContext.Current.CancellationToken);
+        await app.ViewModel.UpdateDistributionAsync();
+        Assert.NotNull(app.ViewModel.LastDistributionUpdate);
+        Assert.Equal(running ? "Running" : "Stopped", await app.Service.GetStatusAsync(TestContext.Current.CancellationToken));
+        if (!running) await app.Service.StartAsync(TestContext.Current.CancellationToken);
+        Assert.Contains("--wf-tcp=8443", app.Service.RunningStrategy!.Arguments);
+    }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task DesktopInstallationOutcomeIsPublishedAtNextStartup(bool success)
+    {
+        var outcome = new DesktopUpdateOutcome(success, "0.3.0", "installation result");
+        using var app = new TestApplication(managedUpdates: new MemoryUpdates(outcome: outcome));
+        await app.ViewModel.InitializeAsync();
+        Assert.Equal(outcome, app.ViewModel.DesktopUpdateOutcome);
+        Assert.Contains("installation result", app.ViewModel.Message);
+        Assert.Equal(!success, app.ViewModel.MessageIsError);
+    }
+
     [Fact]
     public async Task DistributionApplyAndRollbackPreserveBothUnsavedDraftBlocks()
     {
@@ -63,13 +96,17 @@ public sealed class FeatureTests
             Task.FromResult(new UpdateInfo("Desktop", localVersion, localVersion, "", false));
     }
 
-    private sealed class MemoryUpdates : IManagedUpdateService
+    private sealed class MemoryUpdates(Action? apply = null, DesktopUpdateOutcome? outcome = null) : IManagedUpdateService
     {
+        public Task<DesktopUpdateOutcome?> ReadDesktopUpdateOutcomeAsync(CancellationToken cancellationToken = default) => Task.FromResult(outcome);
         public Task<ManagedUpdatePlan> PrepareDistributionAsync(IProgress<ManagedUpdateProgress>? progress = null,
             CancellationToken cancellationToken = default) =>
             Task.FromResult(new ManagedUpdatePlan("test", ManagedUpdateProduct.Distribution, "test", "", "", 0, "", 0, "", "test"));
-        public Task<ManagedUpdateResult> ApplyDistributionAsync(ManagedUpdatePlan plan, CancellationToken cancellationToken = default) =>
-            Task.FromResult(new ManagedUpdateResult("test", "test", "", "", "test"));
+        public Task<ManagedUpdateResult> ApplyDistributionAsync(ManagedUpdatePlan plan, CancellationToken cancellationToken = default)
+        {
+            apply?.Invoke();
+            return Task.FromResult(new ManagedUpdateResult("test", "test", "", "", "test"));
+        }
         public Task RollbackDistributionAsync(ManagedUpdateResult result, CancellationToken cancellationToken = default) => Task.CompletedTask;
         public Task<ManagedUpdatePlan> PrepareDesktopAsync(string localVersion,
             IProgress<ManagedUpdateProgress>? progress = null, CancellationToken cancellationToken = default) => throw new NotSupportedException();

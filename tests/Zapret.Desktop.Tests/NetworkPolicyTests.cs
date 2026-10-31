@@ -11,6 +11,34 @@ namespace Zapret.Desktop.Tests;
 public sealed class NetworkPolicyTests
 {
     [AvaloniaFact]
+    public async Task EachProductHasItsOwnReleaseNotesAfterAnInPlaceCheck()
+    {
+        using var app = new TestApplication(updateService: new Updates());
+        await app.Settings.SaveAsync(new DesktopSettings { CheckUpdates = false }, TestContext.Current.CancellationToken);
+        var opened = new List<Uri>();
+        var window = new MainWindow(app.ViewModel, opened.Add);
+        window.Show();
+        try
+        {
+            await WaitAsync(() => app.ViewModel.Strategies.Count > 0 && !app.ViewModel.Busy);
+            window.GetLogicalDescendants().OfType<Button>()
+                .Single(b => b.GetLogicalDescendants().OfType<TextBlock>().Any(t => t.Text == "Настройки"))
+                .RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+            Dispatcher.UIThread.RunJobs();
+            await app.ViewModel.CheckUpdatesAsync();
+            Dispatcher.UIThread.RunJobs();
+            foreach (var product in new[] { "zapret", "Zapret Desktop" })
+                window.GetLogicalDescendants().OfType<Button>()
+                    .Single(b => b.Content as string == "Что нового в " + product)
+                    .RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+            Assert.Equal(2, opened.Count);
+            Assert.Contains("Flowseal/zapret-discord-youtube/releases/", opened[0].AbsoluteUri);
+            Assert.Contains("fecset/zapret-desktop/releases/", opened[1].AbsoluteUri);
+        }
+        finally { window.Hide(); }
+    }
+
+    [AvaloniaFact]
     public async Task ReleaseNotesHaveAnExplicitActionAfterChecking()
     {
         using var app = new TestApplication(updateService: new Updates());
@@ -24,7 +52,7 @@ public sealed class NetworkPolicyTests
             await app.ViewModel.CheckUpdatesAsync();
             Dispatcher.UIThread.RunJobs();
             Assert.Empty(opened);
-            var release = Assert.Single(window.GetLogicalDescendants().OfType<Button>(), b => b.Content as string == "Что нового");
+            var release = Assert.Single(window.GetLogicalDescendants().OfType<Button>(), b => b.Content as string == "Что нового в Zapret Desktop");
             release.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
             Assert.Equal("https://github.com/fecset/zapret-desktop/releases/tag/v0.3.0", Assert.Single(opened).AbsoluteUri);
         }

@@ -16,6 +16,8 @@ public sealed partial class MainViewModel
     private IReadOnlyDictionary<string, PayloadInspection> payloadStates = new Dictionary<string, PayloadInspection>();
     private DataUpdateResult? hostsUpdateResult;
     private StrategyHistoryDetails? historyDetails;
+    private DesktopUpdateOutcome? desktopUpdateOutcome;
+    public DesktopUpdateOutcome? DesktopUpdateOutcome { get => desktopUpdateOutcome; private set => SetProperty(ref desktopUpdateOutcome, value); }
     public ObservableCollection<UserDataBackupInfo> Backups { get; } = [];
     public ObservableCollection<StrategyHistoryEntry> TestHistory { get; } = [];
     public ConnectionHealthResult? ConnectionHealth { get => connectionHealth; private set => SetProperty(ref connectionHealth, value); }
@@ -266,6 +268,8 @@ public sealed partial class MainViewModel
             DistributionUpdatePlan = null;
             MarkDistributionInstalled(result.Version);
             await ReloadUserDataAsync();
+            if (!restart.Service && await service.GetStatusAsync() != "NotInstalled")
+                await RefreshServiceStrategyAsync();
         }
         finally
         {
@@ -316,12 +320,39 @@ public sealed partial class MainViewModel
     {
         if (state.Service)
         {
+            await RefreshServiceStrategyAsync();
             await service.StartAsync();
             Status = await process.GetStatusAsync();
             Log("INFO", "Служба Zapret запущена после обновления.");
             return;
         }
         if (state.Process) await StartEngineCoreAsync();
+    }
+    private async Task RefreshServiceStrategyAsync()
+    {
+        var selected = SelectedStrategy ?? throw new InvalidOperationException("Выберите стратегию для службы после обновления.");
+        var fresh = (await strategies.GetStrategiesAsync()).FirstOrDefault(item => item.Id == selected.Id)
+            ?? throw new InvalidOperationException("Стратегия службы отсутствует в обновлённом zapret.");
+        await service.UpdateStrategyAsync(fresh);
+    }
+
+    private async Task ReadDesktopUpdateOutcomeAsync()
+    {
+        if (managedUpdates is null) return;
+        try
+        {
+            DesktopUpdateOutcome = await managedUpdates.ReadDesktopUpdateOutcomeAsync();
+            if (DesktopUpdateOutcome is { } outcome)
+            {
+                Message = outcome.Success ? $"Zapret Desktop {outcome.Version} обновлён. {outcome.Detail}" : "Ошибка: " + outcome.Detail;
+                Log(outcome.Success ? "INFO" : "ERROR", Message);
+            }
+        }
+        catch (Exception ex)
+        {
+            Log("WARN", "Не удалось прочитать результат обновления: " + ex.Message);
+            StartupWarnings.Add("Не удалось прочитать результат последнего обновления Desktop. Проверьте журнал установки.");
+        }
     }
     public Task RollbackDistributionUpdateAsync() => RunAsync(async () =>
     {

@@ -15,6 +15,18 @@ public sealed class ManagedUpdateTests : IDisposable
     private string DistributionRoot => Path.Combine(root, "zapret");
     private string HostsPath => Path.Combine(root, "hosts");
 
+    [Fact]
+    public async Task DesktopOutcomeIsConsumedOnceWithoutReadingAnArbitraryLogPath()
+    {
+        using var client = TextClient("");
+        var path = Path.Combine(root, "application.update-result.json");
+        var outcome = new DesktopUpdateOutcome(false, "0.3.0", "Failed installation");
+        File.WriteAllText(path, JsonSerializer.Serialize(outcome));
+        var service = Service(client);
+        Assert.Equal(outcome, await service.ReadDesktopUpdateOutcomeAsync());
+        Assert.Null(await service.ReadDesktopUpdateOutcomeAsync());
+    }
+
     public ManagedUpdateTests()
     {
         Directory.CreateDirectory(DistributionRoot);
@@ -410,9 +422,12 @@ public sealed class ManagedUpdateTests : IDisposable
     }
 
     [Theory]
-    [InlineData(false)]
-    [InlineData(true)]
-    public async Task DesktopHelperWaitsForOwnerExitThenSwapsOnlyTemporaryFixtureAndPreservesUserData(bool tampered)
+    [InlineData(false, "1.20.0", "1.10.0", false)]
+    [InlineData(false, "1.10.0", "1.20.0", false)]
+    [InlineData(true, "1.20.0", "1.10.0", false)]
+    [InlineData(false, "1.20.0", "1.10.0", true)]
+    public async Task DesktopHelperWaitsForOwnerExitThenSwapsOnlyTemporaryFixtureAndPreservesUserData(
+        bool tampered, string installedVersion, string bundledVersion, bool failAfterExit)
     {
         if (!OperatingSystem.IsWindows()) return;
         var source = Path.Combine(root, "helper-source");
@@ -428,10 +443,14 @@ public sealed class ManagedUpdateTests : IDisposable
         Directory.CreateDirectory(Path.Combine(target, "zapret", "lists"));
         File.WriteAllText(Path.Combine(source, "zapret", "lists", "list-general.txt"), "upstream.example\n");
         File.WriteAllText(Path.Combine(target, "zapret", "lists", "list-general.txt"), "custom.example\n");
+        File.WriteAllText(Path.Combine(source, "zapret", "service.bat"), "set LOCAL_VERSION=" + bundledVersion);
+        File.WriteAllText(Path.Combine(target, "zapret", "service.bat"), "set LOCAL_VERSION=" + installedVersion);
+        File.WriteAllText(Path.Combine(source, "zapret", "general-new.bat"), "bundled-only");
+        File.WriteAllText(Path.Combine(target, "zapret", "general-installed.bat"), "installed-only");
         var helperType = typeof(ManagedUpdateService).Assembly.GetType("Zapret.Infrastructure.DesktopUpdateHelper")!;
         var script = (string)helperType.GetField("Script", System.Reflection.BindingFlags.Static | System.Reflection.BindingFlags.NonPublic)!.GetRawConstantValue()!;
         var helperPath = Path.Combine(root, "helper.ps1");
-        File.WriteAllText(helperPath, script);
+        File.WriteAllText(helperPath, script, new UTF8Encoding(true));
         var shell = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.Windows), "System32", "WindowsPowerShell", "v1.0", "powershell.exe");
         var ownerStart = new ProcessStartInfo(shell) { UseShellExecute = false, CreateNoWindow = true, WindowStyle = ProcessWindowStyle.Hidden };
         foreach (var argument in new[] { "-NoProfile", "-NonInteractive", "-Command", "Start-Sleep -Seconds 30" }) ownerStart.ArgumentList.Add(argument);
@@ -443,7 +462,7 @@ public sealed class ManagedUpdateTests : IDisposable
         File.WriteAllText(jobPath, JsonSerializer.Serialize(new
         {
             ProcessId = owner.Id, ProcessStartTicks = owner.StartTime.ToUniversalTime().Ticks.ToString(),
-            Source = source, Target = target, Replacement = target + ".update", Backup = backup, Log = log, Ready = ready,
+            Source = source, Target = target, Replacement = target + ".update", Backup = backup, Log = log, Ready = ready, Version = "0.3.0",
             Hashes = Directory.GetFiles(source, "*", SearchOption.AllDirectories).ToDictionary(x => Path.GetRelativePath(source, x), x => Convert.ToHexString(SHA256.HashData(File.ReadAllBytes(x))).ToLowerInvariant())
         }));
         if (tampered) File.AppendAllText(Path.Combine(source, "Zapret.Desktop.exe"), "modified");
@@ -468,10 +487,20 @@ public sealed class ManagedUpdateTests : IDisposable
             Assert.True(File.Exists(ready), File.Exists(log) ? File.ReadAllText(log) : "Helper never initialized.");
             Assert.False(owner.HasExited);
             Assert.Equal("old-version", File.ReadAllText(Path.Combine(target, "Zapret.Desktop.exe")));
+            if (failAfterExit) File.AppendAllText(Path.Combine(source, "Zapret.Desktop.exe"), "changed after ready");
             owner.Kill();
             await owner.WaitForExitAsync();
             using var cancellation = new CancellationTokenSource(TimeSpan.FromSeconds(10));
             await updater.WaitForExitAsync(cancellation.Token);
+            if (failAfterExit)
+            {
+                Assert.Equal(1, updater.ExitCode);
+                Assert.Equal("old-version", File.ReadAllText(Path.Combine(target, "Zapret.Desktop.exe")));
+                var failure = JsonSerializer.Deserialize<DesktopUpdateOutcome>(File.ReadAllText(target + ".update-result.json"))!;
+                Assert.False(failure.Success);
+                Assert.Contains("hash mismatch", failure.Detail);
+                return;
+            }
             Assert.Equal(0, updater.ExitCode);
             Assert.Equal("new-version", File.ReadAllText(Path.Combine(target, "Zapret.Desktop.exe")));
             Assert.Equal("old-version", File.ReadAllText(Path.Combine(backup, "Zapret.Desktop.exe")));
@@ -479,6 +508,12 @@ public sealed class ManagedUpdateTests : IDisposable
             Assert.Equal("user-data", File.ReadAllText(Path.Combine(target, "custom.txt")));
             Assert.Equal("custom.example\n", File.ReadAllText(Path.Combine(target, "zapret", "lists", "list-general.txt")));
             Assert.StartsWith("SUCCESS:", File.ReadAllText(log));
+            Assert.Equal("set LOCAL_VERSION=" + installedVersion, File.ReadAllText(Path.Combine(target, "zapret", "service.bat")));
+            Assert.True(File.Exists(Path.Combine(target, "zapret", "general-installed.bat")));
+            Assert.False(File.Exists(Path.Combine(target, "zapret", "general-new.bat")));
+            var outcome = JsonSerializer.Deserialize<DesktopUpdateOutcome>(File.ReadAllText(target + ".update-result.json"))!;
+            Assert.True(outcome.Success);
+            Assert.Equal("0.3.0", outcome.Version);
         }
         finally
         {

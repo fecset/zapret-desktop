@@ -33,10 +33,11 @@ internal static class DesktopUpdateHelper
         {
             ProcessId = currentProcessId, ProcessStartTicks = process.StartTime.ToUniversalTime().Ticks.ToString(System.Globalization.CultureInfo.InvariantCulture),
             Source = plan.PreparedDirectory, Target = applicationDirectory, Replacement = replacement, Backup = backup,
-            Log = log, Ready = ready, Hashes = hashes, Relaunch = true
+            Log = log, Ready = ready, Hashes = hashes, Relaunch = true, Version = plan.Version
         };
         await File.WriteAllTextAsync(manifest, JsonSerializer.Serialize(job), new UTF8Encoding(false), ct);
-        await File.WriteAllTextAsync(helper, Script, new UTF8Encoding(false), ct);
+        // Windows PowerShell 5.1 needs a BOM to read localized script literals as UTF-8.
+        await File.WriteAllTextAsync(helper, Script, new UTF8Encoding(true), ct);
         ct.ThrowIfCancellationRequested();
         var windows = Environment.GetFolderPath(Environment.SpecialFolder.Windows);
         var start = new ProcessStartInfo(Path.Combine(windows, "System32", "WindowsPowerShell", "v1.0", "powershell.exe"))
@@ -92,6 +93,22 @@ internal static class DesktopUpdateHelper
         $job = Get-Content -LiteralPath $ManifestPath -Raw -Encoding UTF8 | ConvertFrom-Json
         $movedOld = $false
         $movedNew = $false
+        $ownerExited = $false
+        function Write-Outcome([bool]$success, [string]$detail) {
+            $path = $job.Target + '.update-result.json'
+            Assert-NoLinks $path
+            $version = $job.PSObject.Properties['Version']
+            $value = if ($null -ne $version) { [string]$version.Value } else { '' }
+            $result = @{ Success = $success; Version = $value; Detail = $detail } | ConvertTo-Json -Compress
+            [IO.File]::WriteAllText($path, $result)
+        }
+        function Start-Desktop {
+            $relaunch = $job.PSObject.Properties['Relaunch']
+            if ($ownerExited -and $null -ne $relaunch -and $relaunch.Value) {
+                Assert-NoLinks (Join-Path $job.Target 'Zapret.Desktop.exe')
+                Start-Process -FilePath (Join-Path $job.Target 'Zapret.Desktop.exe') -WorkingDirectory $job.Target
+            }
+        }
         function Assert-NoLinks([string]$path) {
             $current = [IO.Path]::GetFullPath($path)
             while ($current) {
@@ -193,9 +210,21 @@ internal static class DesktopUpdateHelper
                 if ([DateTime]::UtcNow -ge $deadline) { throw 'Desktop did not exit; update was not applied' }
                 Start-Sleep -Milliseconds 250
             }
+            $ownerExited = $true
             Assert-Manifest $job.Source
             Copy-SafeTree $job.Source $job.Replacement $false
             Assert-Manifest $job.Replacement
+            # Desktop and zapret have independent update actions. Keep the installed
+            # distribution as a complete tree, never merge binaries from two versions.
+            $installedDistribution = Join-Path $job.Target 'zapret'
+            if (Test-Path -LiteralPath $installedDistribution -PathType Container) {
+                @(Get-SafeFiles $installedDistribution) | Out-Null
+                $bundledDistribution = Join-Path $job.Replacement 'zapret'
+                Get-Relative $job.Replacement $bundledDistribution | Out-Null
+                @(Get-SafeFiles $bundledDistribution) | Out-Null
+                Remove-Item -LiteralPath $bundledDistribution -Recurse -Force
+                Copy-SafeTree $installedDistribution $bundledDistribution $false
+            }
             Copy-SafeTree $job.Target $job.Replacement $true
             # Recheck the complete trees immediately before the directory transaction.
             @(Get-SafeFiles $job.Target) | Out-Null
@@ -206,10 +235,15 @@ internal static class DesktopUpdateHelper
             [IO.Directory]::Move($job.Replacement, $job.Target)
             $movedNew = $true
             [IO.File]::WriteAllText($job.Log, "SUCCESS: Desktop updated. Backup: $($job.Backup)")
-            $relaunch = $job.PSObject.Properties['Relaunch']
-            if ($null -ne $relaunch -and $relaunch.Value) {
-                try { Start-Process -FilePath (Join-Path $job.Target 'Zapret.Desktop.exe') -WorkingDirectory $job.Target }
-                catch { [IO.File]::AppendAllText($job.Log, "`r`nRelaunch failed: $($_.Exception.Message)") }
+            Write-Outcome $true 'Приложение обновлено. Установленный zapret и пользовательские данные сохранены.'
+            try { Start-Desktop }
+            catch {
+                $relaunchFailure = $_.Exception.Message
+                try {
+                    [IO.File]::AppendAllText($job.Log, "`r`nRelaunch failed: $relaunchFailure")
+                    Write-Outcome $true 'Обновление установлено, но автоматический запуск приложения не удался.'
+                }
+                catch { Write-Warning "Cannot record relaunch failure: $($_.Exception.Message)" }
             }
             exit 0
         }
@@ -232,7 +266,12 @@ internal static class DesktopUpdateHelper
                 }
             }
             catch { $failure += "; ROLLBACK FAILED: $($_.Exception.Message). Backup: $($job.Backup)" }
-            [IO.File]::WriteAllText($job.Log, "FAILED: $failure")
+            try { [IO.File]::WriteAllText($job.Log, "FAILED: $failure") }
+            catch { $failure += "; Cannot write installation log: $($_.Exception.Message)" }
+            try { Write-Outcome $false ("Не удалось установить обновление. Подробности: " + $failure) }
+            catch { Write-Warning "Cannot save update result: $($_.Exception.Message)" }
+            try { Start-Desktop }
+            catch { Write-Warning "Cannot reopen Desktop: $($_.Exception.Message)" }
             exit 1
         }
         """;

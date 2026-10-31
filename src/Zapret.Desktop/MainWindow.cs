@@ -39,6 +39,8 @@ public sealed partial class MainWindow : Window
     private Button? updateCheckButton;
     private Button? upstreamUpdateButton;
     private Button? desktopUpdateButton;
+    private Button? upstreamReleaseNotesButton;
+    private Button? desktopReleaseNotesButton;
     private Button? updateWhatsNewButton;
     private ProgressBar? updateProgressBar;
     private TextBlock? updateProgressStage;
@@ -72,6 +74,7 @@ public sealed partial class MainWindow : Window
     private IBrush TextBrush => Brush(IsLight ? "#16171C" : "#F5F5F8");
     private IBrush MutedBrush => Brush(IsLight ? "#60636F" : "#A3A5AF");
     private static IBrush AccentBrush => Brush("#6544C8");
+    private IBrush AccentTextBrush => Brush(IsLight ? "#6544C8" : "#B9A5FF");
     private IBrush GoodBrush => Brush(IsLight ? "#147346" : "#47C98A");
     private IBrush WarnBrush => Brush(IsLight ? "#835C00" : "#F3C96C");
     private IBrush BadBrush => Brush(IsLight ? "#B42332" : "#F07479");
@@ -381,6 +384,8 @@ public sealed partial class MainWindow : Window
 
     private void RefreshUpdateDisplay()
     {
+        if (upstreamReleaseNotesButton is not null) upstreamReleaseNotesButton.IsVisible = vm.UpstreamUpdate is not null;
+        if (desktopReleaseNotesButton is not null) desktopReleaseNotesButton.IsVisible = vm.DesktopUpdate is not null;
         if (updateCheckButton is not null) updateCheckButton.IsEnabled = !vm.CheckingUpdates;
         if (upstreamUpdateButton is not null)
             upstreamUpdateButton.IsVisible = vm.DistributionUpdatePlan is not null || vm.UpstreamUpdate?.Available == true;
@@ -410,7 +415,10 @@ public sealed partial class MainWindow : Window
             var notes = vm.DesktopUpdate?.Available == true ? vm.DesktopUpdate : vm.UpstreamUpdate;
             updateWhatsNewButton.IsVisible = notes is not null;
             if (notes is not null)
+            {
+                updateWhatsNewButton.Content = "Что нового в " + DisplayProduct(notes.Product);
                 ToolTip.SetTip(updateWhatsNewButton, $"Что нового в {DisplayProduct(notes.Product)} {notes.LatestVersion}");
+            }
         }
         RefreshUpdateProgress();
     }
@@ -435,9 +443,9 @@ public sealed partial class MainWindow : Window
         product.Equals("Desktop", StringComparison.OrdinalIgnoreCase) ? "Zapret Desktop" : product;
 
     private string UpdateStatus(string product, UpdateInfo? update) => update is null
-        ? vm.CheckingUpdates ? $"{product}: проверка..." : vm.UpdateError ?? $"{product}: проверка ещё не выполнена"
-        : update.Available ? $"{product}: установлена {update.LocalVersion} → доступна {update.LatestVersion}"
-        : $"{product}: установлена {update.LocalVersion} · актуальная версия";
+        ? vm.CheckingUpdates ? "Проверка…" : vm.UpdateError ?? "Проверка ещё не выполнена"
+        : update.Available ? $"Установлена {update.LocalVersion} → доступна {update.LatestVersion}"
+        : $"Установлена {update.LocalVersion} · актуальная версия";
 
     private void DetachPage()
     {
