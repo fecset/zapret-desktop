@@ -2,13 +2,13 @@
 
 **Приложение для управления Zapret на Windows:** запуск, выбор и проверка стратегий, редактирование списков и обновления.
 
-`Windows 10/11 x64` · `v0.2.2`
+`Windows 10/11 x64` · `v0.2.4`
 
 Использует движок и стратегии из [дистрибутива Flowseal](https://github.com/Flowseal/zapret-discord-youtube), основанного на [zapret от bol-van](https://github.com/bol-van/zapret).
 
 ## 🖥️ Интерфейс
 
-![Главная страница Zapret Desktop](UI.png)
+![Главная страница Zapret Desktop 0.2.4](UI.jpg)
 
 ## ▶️ Установка и запуск
 
