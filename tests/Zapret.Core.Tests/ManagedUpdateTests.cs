@@ -422,14 +422,20 @@ public sealed class ManagedUpdateTests : IDisposable
     }
 
     [Theory]
-    [InlineData(false, "1.20.0", "1.10.0", false)]
-    [InlineData(false, "1.10.0", "1.20.0", false)]
-    [InlineData(true, "1.20.0", "1.10.0", false)]
-    [InlineData(false, "1.20.0", "1.10.0", true)]
+    [InlineData("success", "1.20.0", "1.10.0")]
+    [InlineData("success", "1.10.0", "1.20.0")]
+    [InlineData("tampered", "1.20.0", "1.10.0")]
+    [InlineData("changed-after-ready", "1.20.0", "1.10.0")]
+    [InlineData("success-log-failure", "1.20.0", "1.10.0")]
+    [InlineData("unsafe-backup", "1.20.0", "1.10.0")]
     public async Task DesktopHelperWaitsForOwnerExitThenSwapsOnlyTemporaryFixtureAndPreservesUserData(
-        bool tampered, string installedVersion, string bundledVersion, bool failAfterExit)
+        string scenario, string installedVersion, string bundledVersion)
     {
         if (!OperatingSystem.IsWindows()) return;
+        var tampered = scenario == "tampered";
+        var failAfterExit = scenario == "changed-after-ready";
+        var failSuccessLog = scenario == "success-log-failure";
+        var unsafeBackup = scenario == "unsafe-backup";
         var source = Path.Combine(root, "helper-source");
         var target = Path.Combine(root, "helper-target");
         Directory.CreateDirectory(source);
@@ -456,7 +462,7 @@ public sealed class ManagedUpdateTests : IDisposable
         foreach (var argument in new[] { "-NoProfile", "-NonInteractive", "-Command", "Start-Sleep -Seconds 30" }) ownerStart.ArgumentList.Add(argument);
         using var owner = Process.Start(ownerStart)!;
         var jobPath = Path.Combine(root, "helper-job.json");
-        var backup = target + ".backup";
+        var backup = unsafeBackup ? Path.Combine(root, "unrelated") : target + ".backup-" + Guid.NewGuid().ToString("N");
         var ready = Path.Combine(root, "helper-ready");
         var log = Path.Combine(root, "helper.log");
         File.WriteAllText(jobPath, JsonSerializer.Serialize(new
@@ -473,7 +479,7 @@ public sealed class ManagedUpdateTests : IDisposable
         {
             var timeout = DateTime.UtcNow.AddSeconds(10);
             while (!File.Exists(ready) && !updater.HasExited && DateTime.UtcNow < timeout) await Task.Delay(50);
-            if (tampered)
+            if (tampered || unsafeBackup)
             {
                 using var failureTimeout = new CancellationTokenSource(TimeSpan.FromSeconds(10));
                 await updater.WaitForExitAsync(failureTimeout.Token);
@@ -481,29 +487,33 @@ public sealed class ManagedUpdateTests : IDisposable
                 Assert.False(File.Exists(ready));
                 Assert.False(Directory.Exists(backup));
                 Assert.Equal("old-version", File.ReadAllText(Path.Combine(target, "Zapret.Desktop.exe")));
-                Assert.Contains("hash mismatch", File.ReadAllText(log));
+                Assert.Contains(unsafeBackup ? "Unexpected Desktop rollback directory" : "hash mismatch", File.ReadAllText(log));
                 return;
             }
             Assert.True(File.Exists(ready), File.Exists(log) ? File.ReadAllText(log) : "Helper never initialized.");
             Assert.False(owner.HasExited);
             Assert.Equal("old-version", File.ReadAllText(Path.Combine(target, "Zapret.Desktop.exe")));
             if (failAfterExit) File.AppendAllText(Path.Combine(source, "Zapret.Desktop.exe"), "changed after ready");
+            if (failSuccessLog) Directory.CreateDirectory(log);
             owner.Kill();
             await owner.WaitForExitAsync();
             using var cancellation = new CancellationTokenSource(TimeSpan.FromSeconds(10));
             await updater.WaitForExitAsync(cancellation.Token);
-            if (failAfterExit)
+            if (failAfterExit || failSuccessLog)
             {
                 Assert.Equal(1, updater.ExitCode);
                 Assert.Equal("old-version", File.ReadAllText(Path.Combine(target, "Zapret.Desktop.exe")));
                 var failure = JsonSerializer.Deserialize<DesktopUpdateOutcome>(File.ReadAllText(target + ".update-result.json"))!;
                 Assert.False(failure.Success);
-                Assert.Contains("hash mismatch", failure.Detail);
+                Assert.Equal("user-settings", File.ReadAllText(Path.Combine(target, "settings.json")));
+                Assert.Equal("custom.example\n", File.ReadAllText(Path.Combine(target, "zapret", "lists", "list-general.txt")));
+                if (failAfterExit) Assert.Contains("hash mismatch", failure.Detail);
+                else Assert.Contains("Cannot write installation log", failure.Detail);
                 return;
             }
             Assert.Equal(0, updater.ExitCode);
             Assert.Equal("new-version", File.ReadAllText(Path.Combine(target, "Zapret.Desktop.exe")));
-            Assert.Equal("old-version", File.ReadAllText(Path.Combine(backup, "Zapret.Desktop.exe")));
+            Assert.False(Directory.Exists(backup));
             Assert.Equal("user-settings", File.ReadAllText(Path.Combine(target, "settings.json")));
             Assert.Equal("user-data", File.ReadAllText(Path.Combine(target, "custom.txt")));
             Assert.Equal("custom.example\n", File.ReadAllText(Path.Combine(target, "zapret", "lists", "list-general.txt")));

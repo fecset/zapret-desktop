@@ -33,7 +33,7 @@ internal static class DesktopUpdateHelper
         {
             ProcessId = currentProcessId, ProcessStartTicks = process.StartTime.ToUniversalTime().Ticks.ToString(System.Globalization.CultureInfo.InvariantCulture),
             Source = plan.PreparedDirectory, Target = applicationDirectory, Replacement = replacement, Backup = backup,
-            Log = log, Ready = ready, Hashes = hashes, Relaunch = true, Version = plan.Version
+            Log = log, Ready = ready, Hashes = hashes, Relaunch = true, RefreshIcons = true, Version = plan.Version
         };
         await File.WriteAllTextAsync(manifest, JsonSerializer.Serialize(job), new UTF8Encoding(false), ct);
         // Windows PowerShell 5.1 needs a BOM to read localized script literals as UTF-8.
@@ -108,6 +108,15 @@ internal static class DesktopUpdateHelper
                 Assert-NoLinks (Join-Path $job.Target 'Zapret.Desktop.exe')
                 Start-Process -FilePath (Join-Path $job.Target 'Zapret.Desktop.exe') -WorkingDirectory $job.Target
             }
+        }
+        function Refresh-DesktopIcon([string]$executable) {
+            # Win32 LONG is 32-bit on both Windows x86 and x64. Item pointers are
+            # caller-owned UTF-16 strings and remain valid until FLUSH completes.
+            Add-Type -TypeDefinition 'using System; using System.Runtime.InteropServices; public static class ZapretDesktopShell { [DllImport("shell32.dll", ExactSpelling = true)] public static extern void SHChangeNotify([MarshalAs(UnmanagedType.I4)] int eventId, uint flags, IntPtr item1, IntPtr item2); }'
+            [ZapretDesktopShell]::SHChangeNotify(0x08000000, 0x1000, [IntPtr]::Zero, [IntPtr]::Zero)
+            $item = [Runtime.InteropServices.Marshal]::StringToCoTaskMemUni($executable)
+            try { [ZapretDesktopShell]::SHChangeNotify(0x2000, 0x1005, $item, [IntPtr]::Zero) }
+            finally { [Runtime.InteropServices.Marshal]::FreeCoTaskMem($item) }
         }
         function Assert-NoLinks([string]$path) {
             $current = [IO.Path]::GetFullPath($path)
@@ -192,6 +201,12 @@ internal static class DesktopUpdateHelper
             foreach ($path in @($job.Source, $job.Target, $job.Replacement, $job.Backup, $job.Log, $job.Ready)) { Assert-NoLinks $path }
             $targetFull = [IO.Path]::GetFullPath($job.Target).TrimEnd('\')
             $sourceFull = [IO.Path]::GetFullPath($job.Source).TrimEnd('\')
+            $backupFull = [IO.Path]::GetFullPath($job.Backup).TrimEnd('\')
+            $backupPrefix = $targetFull + '.backup-'
+            if (-not $backupFull.StartsWith($backupPrefix, [StringComparison]::OrdinalIgnoreCase) -or
+                $backupFull.Substring($backupPrefix.Length) -notmatch '^[0-9a-fA-F]{32}$') {
+                throw 'Unexpected Desktop rollback directory'
+            }
             if ($targetFull -eq [IO.Path]::GetPathRoot($targetFull).TrimEnd('\') -or
                 $sourceFull.StartsWith($targetFull + '\', [StringComparison]::OrdinalIgnoreCase) -or
                 $targetFull.StartsWith($sourceFull + '\', [StringComparison]::OrdinalIgnoreCase) -or $sourceFull -eq $targetFull) {
@@ -234,8 +249,28 @@ internal static class DesktopUpdateHelper
             $movedOld = $true
             [IO.Directory]::Move($job.Replacement, $job.Target)
             $movedNew = $true
-            [IO.File]::WriteAllText($job.Log, "SUCCESS: Desktop updated. Backup: $($job.Backup)")
+            [IO.File]::WriteAllText($job.Log, 'SUCCESS: Desktop updated.')
             Write-Outcome $true 'Приложение обновлено. Установленный zapret и пользовательские данные сохранены.'
+            # The install is committed. Cleanup errors must not roll back a working
+            # version, and a successful update must not retain the old app folder.
+            try {
+                Assert-NoLinks $backupFull
+                @(Get-SafeFiles $backupFull) | Out-Null
+                Remove-Item -LiteralPath $backupFull -Recurse -Force
+            }
+            catch {
+                $cleanupFailure = $_.Exception.Message
+                try {
+                    [IO.File]::AppendAllText($job.Log, [Environment]::NewLine + "Cannot remove temporary rollback directory: $backupFull. $cleanupFailure")
+                    Write-Outcome $true 'Приложение обновлено, но временную папку предыдущей версии не удалось удалить.'
+                }
+                catch { Write-Warning "Cannot record cleanup failure: $($_.Exception.Message)" }
+            }
+            $refreshIcons = $job.PSObject.Properties['RefreshIcons']
+            if ($null -ne $refreshIcons -and $refreshIcons.Value) {
+                try { Refresh-DesktopIcon (Join-Path $job.Target 'Zapret.Desktop.exe') }
+                catch { Write-Warning "Cannot refresh Desktop icon: $($_.Exception.Message)" }
+            }
             try { Start-Desktop }
             catch {
                 $relaunchFailure = $_.Exception.Message
