@@ -3,7 +3,7 @@
   <PropertyGroup>
     <OutputType>WinExe</OutputType>
     <TargetFramework>net10.0-windows</TargetFramework>
-    <Version>0.2.4</Version>
+    <Version>0.3.0</Version>
     <RuntimeIdentifier>win-x64</RuntimeIdentifier>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
@@ -14,7 +14,8 @@
   </PropertyGroup>
   <ItemGroup>
     <AvaloniaResource Include="Assets/app.ico" />
-    <AvaloniaResource Include="Styles/Dropdowns.axaml" />
+    <AvaloniaResource Include="Assets/Fonts/*.ttf" />
+    <AvaloniaResource Include="Styles/*.axaml" />
     <None Include="../../README.md" Link="README.md" CopyToOutputDirectory="Never" CopyToPublishDirectory="Never" />
     <None Include="../../LICENSE" Link="LICENSE" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
     <None Include="../../THIRD_PARTY_NOTICES.md" Link="THIRD_PARTY_NOTICES.md" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />

@@ -47,7 +47,7 @@ public sealed class BackupRestoreSafetyTests
         using var fixture = new Fixture();
         await fixture.Settings.SaveAsync(new DesktopSettings
         {
-            Theme = "Dark", SelectedStrategyId = "my-strategy", MinimizeToTray = false,
+            Theme = "Dark", SelectedStrategyId = "my-strategy", MinimizeToTray = false, StartInTray = true,
             CheckUpdates = false, CheckConnectionAfterStart = false, LogLevel = "Warning"
         });
         await fixture.WriteAsync("lists/list-exclude-user.txt", "personal.example\r\n");
@@ -60,6 +60,7 @@ public sealed class BackupRestoreSafetyTests
         Assert.Equal("Light", settings.Theme);
         Assert.Equal("my-strategy", settings.SelectedStrategyId);
         Assert.False(settings.MinimizeToTray);
+        Assert.True(settings.StartInTray);
         Assert.False(settings.CheckUpdates);
         Assert.False(settings.CheckConnectionAfterStart);
         Assert.Equal("Warning", settings.LogLevel);

@@ -54,7 +54,7 @@ internal static class StartupTaskDefinition
 {
     internal static StartupCommand GetCommand(string executable, string directory) => new(executable,
         Path.GetFileName(executable).Equals("dotnet.exe", StringComparison.OrdinalIgnoreCase)
-            ? $"\"{Path.Combine(directory, "Zapret.Desktop.dll")}\"" : "", directory);
+            ? $"\"{Path.Combine(directory, "Zapret.Desktop.dll")}\" --autostart" : "--autostart", directory);
 
     internal static string BuildXml(string userId, StartupCommand command)
     {

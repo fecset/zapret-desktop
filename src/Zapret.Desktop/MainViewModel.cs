@@ -270,7 +270,7 @@ public sealed partial class MainViewModel(IZapretDistribution distribution, IStr
     {
         var updated = Draft.ToSettings(settings);
         if (!settingsSavePending && updated.StartWithWindows == settings.StartWithWindows && updated.StartZapretOnLaunch == settings.StartZapretOnLaunch &&
-            updated.MinimizeToTray == settings.MinimizeToTray && updated.CheckUpdates == settings.CheckUpdates &&
+            updated.StartInTray == settings.StartInTray && updated.MinimizeToTray == settings.MinimizeToTray && updated.CheckUpdates == settings.CheckUpdates &&
             updated.CheckConnectionAfterStart == settings.CheckConnectionAfterStart && updated.Theme == settings.Theme)
         { Message = "Настройки не изменились"; return; }
         var previousStartup = startup.IsEnabled();

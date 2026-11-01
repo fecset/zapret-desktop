@@ -23,7 +23,7 @@ public sealed partial class MainWindow
         }
         var tools = new StackPanel { Spacing = 13 };
         tools.Children.Add(Text("Выберите файл", 16, FontWeight.SemiBold));
-        var searchRow = new WrapPanel { Orientation = Orientation.Horizontal };
+        var searchRow = new WrapPanel { Orientation = Orientation.Horizontal, ItemSpacing = 8, LineSpacing = 8 };
         var files = Dropdown(vm.ListFiles,
             vm.ListFiles.FirstOrDefault(name => name.Equals("list-general.txt", StringComparison.OrdinalIgnoreCase)) ?? vm.ListFiles[0], 235);
         var query = Input("Найти домен или IP-адрес", 245);
@@ -42,7 +42,6 @@ public sealed partial class MainWindow
         var open = Button("Открыть папку", () => { vm.OpenListsFolder(); return Task.CompletedTask; });
         foreach (var control in new Control[] { files, query, find, open })
         {
-            control.Margin = new Thickness(0, 0, 9, 9);
             searchRow.Children.Add(control);
         }
         tools.Children.Add(searchRow);
@@ -56,8 +55,7 @@ public sealed partial class MainWindow
         var entry = Input("Например, example.com", 280);
         var entries = new ListBox { ItemsSource = vm.ListLines,
             Background = SurfaceBrush, Foreground = TextBrush };
-        var editRow = new WrapPanel { Orientation = Orientation.Horizontal };
-        entry.Margin = new Thickness(0, 0, 9, 9);
+        var editRow = new WrapPanel { Orientation = Orientation.Horizontal, ItemSpacing = 8, LineSpacing = 8 };
         editRow.Children.Add(entry);
         var add = Button("Добавить домен", async () =>
         {
@@ -73,8 +71,6 @@ public sealed partial class MainWindow
             await LoadAsync();
             entry.Text = "";
         }, danger: true);
-        add.Margin = new Thickness(0, 0, 9, 9);
-        remove.Margin = new Thickness(0, 0, 9, 9);
         editRow.Children.Add(add);
         editRow.Children.Add(remove);
         edit.Children.Add(editRow);
@@ -115,7 +111,7 @@ public sealed partial class MainWindow
     {
         Heading("Диагностика", "Проверка компонентов и подсказки для устранения неполадок.");
         var restricted = StrategyTestRestrictionNotice();
-        var actions = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 9 };
+        var actions = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 8 };
         var diagnose = Button("Проверить систему", async () =>
         {
             await vm.DiagnoseAsync();
@@ -177,7 +173,7 @@ public sealed partial class MainWindow
         tools.Children.Add(Button("Очистить", () => { vm.ClearLogs(); return Task.CompletedTask; }, danger: true));
         page.Children.Add(tools);
         var list = new ListBox { ItemsSource = vm.FilteredLogs, Background = SurfaceBrush,
-            Foreground = TextBrush, BorderThickness = new Thickness(0), FontFamily = new FontFamily("Consolas") };
+            Foreground = TextBrush, BorderThickness = new Thickness(0), FontFamily = EngineeringTheme.Font };
         FillRemainingHeight(Panel(list, 8));
     }
 
@@ -202,7 +198,7 @@ public sealed partial class MainWindow
         var processConflict = vm.Status?.State is ZapretRunState.Running or ZapretRunState.External;
         if (processConflict)
             stack.Children.Add(Text("Перед запуском службы остановите работающий winws. Внешний экземпляр остановите там, где он был запущен.", 12, color: WarnBrush));
-        var actions = new WrapPanel { Orientation = Orientation.Horizontal };
+        var actions = new WrapPanel { Orientation = Orientation.Horizontal, ItemSpacing = 8, LineSpacing = 8 };
         var serviceState = vm.Status?.ServiceStatus;
         var available = serviceState == "NotInstalled"
             ? new[] { ("Установить службу", "install") }
@@ -213,7 +209,6 @@ public sealed partial class MainWindow
         {
             var button = Button(label, async () => { await vm.ServiceAsync(operation); Show("Настройки"); },
                 primary: operation is "install" or "start", danger: operation == "remove");
-            button.Margin = new Thickness(0, 0, 8, 8);
             actions.Children.Add(button);
         }
         stack.Children.Add(actions);
@@ -249,9 +244,9 @@ public sealed partial class MainWindow
         game.SelectionChanged += (_, _) => { if (game.SelectedItem is GameFilterMode mode) vm.Draft.GameMode = mode; };
         tcp.PropertyChanged += (_, change) => { if (change.Property == TextBox.TextProperty) vm.Draft.TcpPorts = tcp.Text ?? ""; };
         udp.PropertyChanged += (_, change) => { if (change.Property == TextBox.TextProperty) vm.Draft.UdpPorts = udp.Text ?? ""; };
-        var gameRow = new WrapPanel { Orientation = Orientation.Horizontal };
+        var gameRow = new WrapPanel { Orientation = Orientation.Horizontal, ItemSpacing = 8, LineSpacing = 8 };
         foreach (var item in new Control[] { Labelled("Режим", game), Labelled("TCP порты", tcp), Labelled("UDP порты", udp) })
-        { item.Margin = new Thickness(0, 0, 8, 8); gameRow.Children.Add(item); }
+        { gameRow.Children.Add(item); }
         stack.Children.Add(gameRow);
         stack.Children.Add(Text("IPSet Filter", 13, FontWeight.SemiBold));
         var ipset = Dropdown(Enum.GetValues<IpSetMode>(), vm.Draft.IpSetMode, 275);
@@ -264,9 +259,11 @@ public sealed partial class MainWindow
         var ipRow = new WrapPanel { Orientation = Orientation.Horizontal };
         ipRow.Children.Add(ipset);
         stack.Children.Add(ipRow);
-        stack.Children.Add(EngineButton("Сохранить фильтры", () => vm.ApplyFilterDraftAsync(), primary: true));
-        stack.Children.Add(EngineButton("Применить и перезапустить Zapret", () => vm.ApplyFilterDraftAsync(restart: true),
+        var filterActions = new WrapPanel { ItemSpacing = 8, LineSpacing = 8 };
+        filterActions.Children.Add(EngineButton("Сохранить фильтры", () => vm.ApplyFilterDraftAsync(), primary: true));
+        filterActions.Children.Add(EngineButton("Применить и перезапустить Zapret", () => vm.ApplyFilterDraftAsync(restart: true),
             () => vm.SelectedStrategy is not null && vm.Status?.State != ZapretRunState.External));
+        stack.Children.Add(filterActions);
         page.Children.Add(Panel(stack));
     }
     private void AppSettings()
@@ -274,17 +271,25 @@ public sealed partial class MainWindow
         var stack = new StackPanel { Spacing = 12 };
         stack.Children.Add(Text("Приложение", 17, FontWeight.SemiBold));
         var windows = Check("Запускать приложение вместе с Windows", vm.Draft.StartWithWindows);
+        var startInTray = Check("При автозапуске сворачивать окно в трей", vm.Draft.StartInTray);
+        startInTray.Margin = new Thickness(28, 0, 0, 0);
+        startInTray.IsVisible = vm.Draft.StartWithWindows;
         var launch = Check("Запускать Zapret при открытии приложения", vm.Draft.StartZapretOnLaunch);
         var tray = Check("При закрытии скрывать окно в трей", vm.Draft.MinimizeToTray);
         var updates = Check("Проверять обновления при запуске", vm.Draft.CheckUpdates);
         var connection = Check("Проверять доступность сервисов после запуска Zapret", vm.Draft.CheckConnectionAfterStart);
-        windows.IsCheckedChanged += (_, _) => vm.Draft.StartWithWindows = windows.IsChecked == true;
+        windows.IsCheckedChanged += (_, _) =>
+        {
+            vm.Draft.StartWithWindows = windows.IsChecked == true;
+            startInTray.IsVisible = vm.Draft.StartWithWindows;
+        };
+        startInTray.IsCheckedChanged += (_, _) => vm.Draft.StartInTray = startInTray.IsChecked == true;
         launch.IsCheckedChanged += (_, _) => vm.Draft.StartZapretOnLaunch = launch.IsChecked == true;
         tray.IsCheckedChanged += (_, _) => vm.Draft.MinimizeToTray = tray.IsChecked == true;
         updates.IsCheckedChanged += (_, _) => vm.Draft.CheckUpdates = updates.IsChecked == true;
         connection.IsCheckedChanged += (_, _) => vm.Draft.CheckConnectionAfterStart = connection.IsChecked == true;
-        foreach (var check in new[] { windows, launch, tray, updates, connection }) stack.Children.Add(check);
-        stack.Children.Add(Text("Чтобы выбранная стратегия запускалась вместе с Windows, включите первые два пункта.", 12, color: MutedBrush));
+        foreach (var check in new[] { windows, startInTray, launch, tray, updates, connection }) stack.Children.Add(check);
+        stack.Children.Add(Text("Для запуска стратегии вместе с Windows включите «Запускать приложение вместе с Windows» и «Запускать Zapret при открытии приложения».", 12, color: MutedBrush));
         var themeRow = new StackPanel { Orientation = Orientation.Vertical, Spacing = 6 };
         themeRow.Children.Add(Text("Тема", 12, color: MutedBrush));
         var theme = Dropdown(new[] { "System", "Light", "Dark" }, vm.Draft.Theme, 160);
@@ -334,10 +339,10 @@ public sealed partial class MainWindow
             {
                 Child = preparation,
                 Padding = new Thickness(14),
-                Background = Brush(IsLight ? "#F6F2FF" : "#1D1929"),
-                BorderBrush = Brush(IsLight ? "#D8CCFF" : "#3A3157"),
+                Background = Token("infoBg"),
+                BorderBrush = OutlineBrush,
                 BorderThickness = new Thickness(1),
-                CornerRadius = new CornerRadius(12)
+                CornerRadius = new CornerRadius(0)
             });
             RefreshUpdateProgress();
         }
@@ -427,14 +432,14 @@ public sealed partial class MainWindow
     }
     private TextBox Input(string hint, double width) => new()
     {
-        PlaceholderText = hint, Width = width, Height = 40, Background = SurfaceRaisedBrush,
-        Foreground = TextBrush, BorderBrush = OutlineBrush, CornerRadius = new CornerRadius(8),
-        Padding = new Thickness(12, 0), FontSize = 14,
+        PlaceholderText = hint, Width = width, Height = EngineeringTheme.ControlHeight, Background = SurfaceBrush,
+        Foreground = TextBrush, BorderBrush = Token("control"), CornerRadius = new CornerRadius(EngineeringTheme.ControlRadius),
+        Padding = new Thickness(15, 0), FontSize = 13,
         VerticalAlignment = VerticalAlignment.Center, VerticalContentAlignment = VerticalAlignment.Center
     };
     private CheckBox Check(string label, bool value) => new()
     {
-        Content = label, IsChecked = value, Foreground = TextBrush, FontSize = 14
+        Content = label, IsChecked = value, Foreground = TextBrush, FontSize = 13
     };
     private StackPanel Labelled(string label, Control control)
     {

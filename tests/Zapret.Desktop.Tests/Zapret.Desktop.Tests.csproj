@@ -6,6 +6,9 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
     <IsPackable>false</IsPackable>
+    <DefineConstants Condition="'$(UiPreview)' == 'true'">$(DefineConstants);UI_PREVIEW</DefineConstants>
+    <StartupObject Condition="'$(UiPreview)' == 'true'">Zapret.Desktop.Tests.NativeUiPreview</StartupObject>
+    <ApplicationIcon Condition="'$(UiPreview)' == 'true'">../../src/Zapret.Desktop/Assets/app.ico</ApplicationIcon>
   </PropertyGroup>
   <ItemGroup>
     <ProjectReference Include="../../src/Zapret.Desktop/Zapret.Desktop.csproj" />

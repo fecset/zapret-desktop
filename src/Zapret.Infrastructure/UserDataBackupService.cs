@@ -473,6 +473,7 @@ public sealed class UserDataBackupService : IUserDataBackupService
                         if (property.Value.ValueKind != JsonValueKind.String || property.Value.GetString() is not ("Trace" or "Debug" or "Information" or "Warning" or "Error" or "Critical" or "None")) throw new JsonException();
                         break;
                     case nameof(DesktopSettings.StartWithWindows):
+                    case nameof(DesktopSettings.StartInTray):
                     case nameof(DesktopSettings.StartZapretOnLaunch):
                     case nameof(DesktopSettings.MinimizeToTray):
                     case nameof(DesktopSettings.CheckUpdates):

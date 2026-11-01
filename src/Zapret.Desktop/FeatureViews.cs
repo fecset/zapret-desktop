@@ -1,4 +1,5 @@
 using Avalonia;
+using Avalonia.Automation;
 using Avalonia.Controls;
 using Avalonia.Controls.Templates;
 using Avalonia.Layout;
@@ -12,20 +13,96 @@ public sealed partial class MainWindow
 {
     private void ConnectionPanel()
     {
-        var stack = new StackPanel { Spacing = 8 };
-        stack.Children.Add(Text("Доступность сервисов", 16, FontWeight.SemiBold));
-        stack.Children.Add(Text("Проверяем ответы контрольных HTTPS-адресов. Воспроизведение видео YouTube и голосовая связь Discord проверяются отдельно.", 12, color: MutedBrush));
-        stack.Children.Add(EngineButton("Проверить соединение", vm.CheckConnectionAsync,
-            isLoading: () => vm.CheckingConnection));
-        if (vm.ConnectionHealth is { } health)
+        var stack = new StackPanel();
+        var heading = new Grid { ColumnDefinitions = new ColumnDefinitions("*,Auto") };
+        var title = Text("Доступность сервисов", 16, FontWeight.Medium);
+        title.VerticalAlignment = VerticalAlignment.Center;
+        heading.Children.Add(title);
+        var check = EngineButton("Проверить соединение", vm.CheckConnectionAsync,
+            isLoading: () => vm.CheckingConnection);
+        check.Width = ActionWidth;
+        AutomationProperties.SetAutomationId(check, "CheckConnection");
+        AutomationProperties.SetHelpText(check, "Повторная проверка контрольных HTTPS-адресов");
+        Grid.SetColumn(check, 1);
+        heading.Children.Add(check);
+        stack.Children.Add(heading);
+        var time = Text(vm.CheckingConnection ? "Проверка выполняется…" : vm.ConnectionError is not null
+            ? "Последняя попытка завершилась ошибкой"
+            : vm.ConnectionHealth is { } health ? "Последняя проверка: " + health.CheckedAt.ToLocalTime().ToString("g")
+            : "Соединение ещё не проверялось", 12, color: MutedBrush);
+        time.MinHeight = 18;
+        time.LineHeight = 18;
+        time.Margin = new Thickness(0, Compact ? 0 : 2, 0, Compact ? 0 : 8);
+        stack.Children.Add(time);
+        var targets = vm.ConnectionHealth?.Targets;
+        var names = new[] { "YouTube", "Discord" }.Concat(targets?.Select(t => t.Name) ?? [])
+            .Distinct(StringComparer.OrdinalIgnoreCase);
+        foreach (var name in names)
         {
-            stack.Children.Add(Text("Последняя проверка: " + health.CheckedAt.ToLocalTime().ToString("g"), 11, color: MutedBrush));
-            foreach (var target in health.Targets)
-                stack.Children.Add(Text($"{target.Name}: {(target.Passed ? "HTTPS-запрос успешен" : "ошибка проверки")} · {target.Duration.TotalMilliseconds:F0} мс · {target.Detail}",
-                    12, color: target.Passed ? GoodBrush : WarnBrush));
+            var target = targets?.FirstOrDefault(t => t.Name.Equals(name, StringComparison.OrdinalIgnoreCase));
+            var checkedResult = target is not null && !vm.CheckingConnection && vm.ConnectionError is null;
+            var color = vm.CheckingConnection ? AccentTextBrush : vm.ConnectionError is not null ? BadBrush :
+                checkedResult ? target!.Passed ? GoodBrush : BadBrush : MutedBrush;
+            var row = new Grid { ColumnDefinitions = new ColumnDefinitions(Compact ? "130,250,100,*,40" : "160,288,108,*,40"),
+                MinHeight = Compact ? 36 : 44 };
+            row.Children.Add(CenteredText(name, 14, FontWeight.Medium));
+            var result = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 6, VerticalAlignment = VerticalAlignment.Center };
+            result.Children.Add(new Border { Width = 6, Height = 6, CornerRadius = new CornerRadius(3), Background = color,
+                VerticalAlignment = VerticalAlignment.Center });
+            result.Children.Add(Text(vm.CheckingConnection ? "Проверяется…" : vm.ConnectionError is not null ? "Ошибка проверки" :
+                checkedResult ? target!.Passed ? "HTTPS доступен" : "HTTPS недоступен" : "Не проверялось", 13, color: color));
+            Grid.SetColumn(result, 1);
+            row.Children.Add(result);
+            var duration = CenteredText(checkedResult ? $"{target!.Duration.TotalMilliseconds:F0} мс" : "—", 13, color: MutedBrush);
+            Grid.SetColumn(duration, 2);
+            row.Children.Add(duration);
+            var detailText = vm.ConnectionError ?? (target is null ? "Запустите проверку соединения." :
+                $"{target.Url}\n{(target.HttpStatusCode is { } status ? $"HTTP {status} · " : "")}{target.Detail}");
+            if (vm.CheckingConnection) detailText = "Выполняется новая проверка. Предыдущие результаты будут заменены после её завершения.";
+            var technicalText = Text(detailText, 12, color: MutedBrush);
+            technicalText.LineHeight = 18;
+            technicalText.VerticalAlignment = VerticalAlignment.Center;
+            var details = new Border { Child = technicalText, Background = Token("hover"), Margin = new Thickness(0, 4, 0, 4),
+                Padding = new Thickness(16, 12), IsVisible = expandedConnectionDetails.Contains(name) };
+            AutomationProperties.SetAutomationId(details, "ConnectionDetails:" + name);
+            var chevron = new Avalonia.Controls.Shapes.Path { Data = Geometry.Parse("M1 1 L5 5 L9 1"),
+                Stroke = MutedBrush, StrokeThickness = 1.5, StrokeLineCap = PenLineCap.Round,
+                Width = 10, Height = 6, HorizontalAlignment = HorizontalAlignment.Center, VerticalAlignment = VerticalAlignment.Center };
+            var disclosure = new Button { Content = chevron,
+                Width = 40, Height = Compact ? 36 : 44, Background = Brushes.Transparent, Foreground = MutedBrush,
+                BorderThickness = new Thickness(0), Padding = new Thickness(0),
+                HorizontalContentAlignment = HorizontalAlignment.Center, VerticalContentAlignment = VerticalAlignment.Center };
+            StyleAction(disclosure);
+            AutomationProperties.SetName(disclosure, "Подробности " + name);
+            AutomationProperties.SetAutomationId(disclosure, "ConnectionDisclosure:" + name);
+            void UpdateDisclosure()
+            {
+                details.IsVisible = expandedConnectionDetails.Contains(name);
+                chevron.RenderTransform = new RotateTransform(details.IsVisible ? 180 : 0);
+                AutomationProperties.SetHelpText(disclosure, details.IsVisible ? "Подробности раскрыты" : "Подробности свёрнуты");
+            }
+            disclosure.Click += (_, _) =>
+            {
+                if (!expandedConnectionDetails.Add(name)) expandedConnectionDetails.Remove(name);
+                UpdateDisclosure();
+            };
+            UpdateDisclosure();
+            Grid.SetColumn(disclosure, 4);
+            row.Children.Add(disclosure);
+            stack.Children.Add(row);
+            stack.Children.Add(details);
         }
-        else stack.Children.Add(Text("Соединение ещё не проверялось", 12, color: MutedBrush));
-        page.Children.Add(Panel(stack, 16));
+        var scope = Text("HTTPS-проверка не подтверждает воспроизведение видео YouTube и голосовую связь Discord.", 12, color: MutedBrush);
+        scope.Margin = new Thickness(0, Compact ? 0 : 10, 0, 0);
+        stack.Children.Add(scope);
+        page.Children.Add(DashboardSection(stack, "ServiceAvailability", new Thickness(EngineeringTheme.SectionPadding)));
+    }
+
+    private TextBlock CenteredText(string text, double size, FontWeight? weight = null, IBrush? color = null)
+    {
+        var control = Text(text, size, weight, color);
+        control.VerticalAlignment = VerticalAlignment.Center;
+        return control;
     }
 
     private void BackupSettings()
@@ -211,7 +288,7 @@ public sealed partial class MainWindow
     private TextBox ReportBox(string text) => new()
     {
         Text = text, IsReadOnly = true, AcceptsReturn = true, TextWrapping = TextWrapping.NoWrap,
-        Height = 180, Background = SurfaceRaisedBrush, Foreground = TextBrush, FontFamily = new FontFamily("Consolas")
+        Height = 180, Background = SurfaceRaisedBrush, Foreground = TextBrush, FontFamily = EngineeringTheme.Font
     };
     private void AddFeatureAction(Panel row, string label, Func<Task> action, string section = "Настройки")
     {

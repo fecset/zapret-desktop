@@ -211,7 +211,8 @@ internal sealed class TestApplication : IDisposable
 
     public TestApplication(IDiagnosticService? diagnostics = null, IConnectionHealthService? connection = null,
         bool featureServices = false, IPayloadRecoveryService? payloadRecovery = null, HttpClient? updateClient = null,
-        IUpdateService? updateService = null, IStrategyTester? strategyTester = null, IManagedUpdateService? managedUpdates = null)
+        IUpdateService? updateService = null, IStrategyTester? strategyTester = null, IManagedUpdateService? managedUpdates = null,
+        IZapretProcessManager? processManager = null, IServiceManager? serviceManager = null)
     {
         Distribution = new(Path.Combine(workspace, "zapret"));
         Directory.CreateDirectory(Distribution.ListsDirectory);
@@ -223,7 +224,7 @@ internal sealed class TestApplication : IDisposable
         Strategies = new(Distribution);
         Settings = new(Path.Combine(workspace, "data", "settings.json"));
         Process = new(Service, Distribution);
-        ViewModel = new(Distribution, Strategies, Process, Service, new FilterService(Distribution),
+        ViewModel = new(Distribution, Strategies, processManager ?? Process, serviceManager ?? Service, new FilterService(Distribution),
             diagnostics!, new ListService(Distribution), updateService!, strategyTester ?? Tester, Settings, new TestStartupService(),
             new FakePayloadService(Distribution, Path.Combine(workspace, "data")), new TestPrivilegeService(), NullLogger<MainViewModel>.Instance,
             backups: featureServices ? new UserDataBackupService(Distribution, Settings, Path.Combine(workspace, "data")) : null,
@@ -301,6 +302,7 @@ internal sealed class TestProcessManager(TestServiceManager service, IZapretDist
 {
     public ZapretRunState NormalState { get; set; }
     public string DriverState { get; set; } = "Stopped";
+    public ZapretStatus? StatusOverride { get; set; }
     public Exception? StopError { get; set; }
     public Func<Task>? BeforeStop { get; set; }
     public int StopCalls { get; private set; }
@@ -308,7 +310,7 @@ internal sealed class TestProcessManager(TestServiceManager service, IZapretDist
     public ZapretStrategy? StartedStrategy { get; private set; }
     public string? IpSetAtStart { get; private set; }
     public event Action<string, string>? OutputReceived { add { } remove { } }
-    public Task<ZapretStatus> GetStatusAsync(CancellationToken cancellationToken = default) => Task.FromResult(new ZapretStatus(
+    public Task<ZapretStatus> GetStatusAsync(CancellationToken cancellationToken = default) => Task.FromResult(StatusOverride ?? new ZapretStatus(
         NormalState != ZapretRunState.Stopped ? NormalState : service.State == "Running" ? ZapretRunState.ServiceRunning : ZapretRunState.Stopped,
         null, null, service.RunningStrategy?.Id, DriverState, service.State));
     public async Task<ZapretStatus> StartAsync(ZapretStrategy strategy, CancellationToken cancellationToken = default)

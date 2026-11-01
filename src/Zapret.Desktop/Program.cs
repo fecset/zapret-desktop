@@ -36,7 +36,7 @@ internal static class Program
                 ownsInstance = false;
                 instance.Dispose();
                 instance = null;
-                RequestElevation();
+                RequestElevation(args);
                 return;
             }
             using var activation = new EventWaitHandle(false, EventResetMode.AutoReset, InstanceName + "-activate");
@@ -67,7 +67,7 @@ internal static class Program
     private static bool IsAdministrator() => OperatingSystem.IsWindows() &&
         new WindowsPrincipal(WindowsIdentity.GetCurrent()).IsInRole(WindowsBuiltInRole.Administrator);
 
-    private static void RequestElevation()
+    private static void RequestElevation(string[] args)
     {
         const uint yesNoWarning = 0x00000004 | 0x00000030;
         if (MessageBox(IntPtr.Zero,
@@ -79,6 +79,7 @@ internal static class Program
             var start = new ProcessStartInfo(executable) { UseShellExecute = true, Verb = "runas" };
             if (Path.GetFileName(executable).Equals("dotnet.exe", StringComparison.OrdinalIgnoreCase))
                 start.ArgumentList.Add(Path.Combine(AppContext.BaseDirectory, "Zapret.Desktop.dll"));
+            foreach (var argument in args) start.ArgumentList.Add(argument);
             Process.Start(start);
         }
         catch (Win32Exception ex) when (ex.NativeErrorCode == 1223) { }

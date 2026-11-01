@@ -26,6 +26,7 @@ public sealed partial class MainWindow
 
     private void RefreshButtonActivity()
     {
+        RememberPageFocus();
         foreach (var (button, key, externalBusy) in actionButtons)
             button.IsBusy = activeButtonActions.Contains(key) || externalBusy?.Invoke() == true;
     }

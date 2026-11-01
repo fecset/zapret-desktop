@@ -25,6 +25,7 @@ public sealed partial class MainWindow
             Background = Brushes.Transparent, BorderThickness = new Thickness(0), CornerRadius = new CornerRadius(4),
             HorizontalContentAlignment = HorizontalAlignment.Center, VerticalContentAlignment = VerticalAlignment.Center
         };
+        StyleAction(button);
         AutomationProperties.SetName(button, "Скрыть сообщение");
         ToolTip.SetTip(button, "Скрыть сообщение");
         button.Click += (_, _) => { feedbackTimer.Stop(); feedbackPanel.IsVisible = false; };

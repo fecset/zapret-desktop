@@ -14,7 +14,6 @@ public sealed class LoadingSpinner : Control
     public static readonly StyledProperty<IBrush?> ForegroundProperty =
         AvaloniaProperty.Register<LoadingSpinner, IBrush?>(nameof(Foreground), Brushes.White);
     private static readonly Geometry Arc = Geometry.Parse("M 8,1 A 7,7 0 1 1 1,8");
-    private static readonly IBrush LightPrimaryStroke = new SolidColorBrush(Color.Parse("#6544C8"));
     private readonly DispatcherTimer timer = new() { Interval = TimeSpan.FromMilliseconds(33) };
     private bool attached;
     private readonly List<Visual> visibilityAncestors = [];
@@ -32,8 +31,8 @@ public sealed class LoadingSpinner : Control
     }
     public override void Render(DrawingContext context)
     {
-        var stroke = ActualThemeVariant == ThemeVariant.Light && Foreground is ISolidColorBrush { Color: var color } && color == Colors.White
-            ? LightPrimaryStroke : Foreground;
+        var stroke = this.GetVisualAncestors().OfType<ActionButton>().Any(button => button.IsBusy)
+            ? EngineeringTheme.Brush("disabledText", ActualThemeVariant == ThemeVariant.Light) : Foreground;
         using (context.PushTransform(Matrix.CreateRotation(angle, new Point(8, 8))))
             context.DrawGeometry(null, new Pen(stroke, 2, lineCap: PenLineCap.Round), Arc);
     }

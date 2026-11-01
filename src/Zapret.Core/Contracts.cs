@@ -19,6 +19,7 @@ public sealed class DesktopSettings
 {
     public string? SelectedStrategyId { get; set; }
     public bool StartWithWindows { get; set; }
+    public bool StartInTray { get; set; }
     public bool StartZapretOnLaunch { get; set; }
     public bool MinimizeToTray { get; set; } = true;
     public bool CheckUpdates { get; set; } = true;

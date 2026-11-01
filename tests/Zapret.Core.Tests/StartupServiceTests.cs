@@ -20,7 +20,7 @@ public sealed class StartupServiceTests
         Assert.True(service.MigrateLegacyRegistration());
         Assert.True(service.IsEnabled());
         Assert.False(registration.HasLegacyEntry);
-        Assert.Equal(new StartupCommand(Executable, "", Directory), registration.Command);
+        Assert.Equal(new StartupCommand(Executable, "--autostart", Directory), registration.Command);
         Assert.Equal(["register", "remove-legacy"], registration.Operations);
         Assert.False(service.MigrateLegacyRegistration());
         Assert.Equal(2, registration.Operations.Count);
@@ -86,7 +86,7 @@ public sealed class StartupServiceTests
         var registration = new Registration();
         var service = new WindowsStartupService(registration, @"C:\Program Files\dotnet\DOTNET.EXE", Directory);
         service.SetEnabled(true);
-        Assert.Equal($"\"{Directory}\\Zapret.Desktop.dll\"", registration.Command!.Arguments);
+        Assert.Equal($"\"{Directory}\\Zapret.Desktop.dll\" --autostart", registration.Command!.Arguments);
         Assert.Equal(Directory, registration.Command.WorkingDirectory);
     }
 

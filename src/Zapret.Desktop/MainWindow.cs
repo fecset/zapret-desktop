@@ -6,6 +6,7 @@ using Avalonia.Automation;
 using Avalonia.Controls;
 using Avalonia.Controls.ApplicationLifetimes;
 using Avalonia.Controls.Templates;
+using Avalonia.Input;
 using Avalonia.Input.Platform;
 using Avalonia.Layout;
 using Avalonia.Media;
@@ -21,9 +22,10 @@ public sealed partial class MainWindow : Window
 {
     private readonly MainViewModel vm;
     private readonly Action<Uri> openReleasePage;
+    private readonly Action? exitApplication;
     private readonly DispatcherTimer statusTimer = new() { Interval = TimeSpan.FromSeconds(5) };
     private readonly DispatcherTimer feedbackTimer = new() { Interval = TimeSpan.FromSeconds(8) };
-    private readonly StackPanel page = new() { Spacing = 18 };
+    private readonly StackPanel page = new() { Spacing = EngineeringTheme.SectionGap };
     private readonly Dictionary<string, Button> navButtons = [];
     private readonly List<(Button Button, Func<bool> CanExecute)> engineControls = [];
     private TextBlock footer = new();
@@ -55,56 +57,86 @@ public sealed partial class MainWindow : Window
     private Button? strategyCancelButton;
     private Button? strategyRecommendationButton;
     private Border sidebarStatusDot = new();
+    private Border sidebarStatusPanel = new();
     private ScrollViewer contentScroll = new();
     private ContentControl contentHost = new();
     private Grid? fillLayout;
     private string currentPage = "Главная";
     private bool exitAllowed;
     private bool exitInProgress;
-    private bool openedOnce;
+    private Task? initialization;
     private string? payloadSourceSelection;
+    private readonly HashSet<string> expandedConnectionDetails = new(StringComparer.OrdinalIgnoreCase);
+    private bool compact;
+    private string? pendingFocusId;
+    private string? pendingFocusName;
+    private NavigationMethod lastFocusMethod;
+    private NavigationMethod pendingFocusMethod;
+    private WindowCaptionIcon? maximizeCaptionIcon;
+    private bool Compact => compact;
+    private double ActionWidth => Compact ? EngineeringTheme.CompactActionWidth : EngineeringTheme.ActionWidth;
 
     private bool IsLight => vm.Settings.Theme == "Light" ||
         vm.Settings.Theme == "System" && Application.Current?.ActualThemeVariant == ThemeVariant.Light;
-    private IBrush CanvasBrush => Brush(IsLight ? "#F5F6FA" : "#101115");
-    private IBrush SidebarBrush => Brush(IsLight ? "#FFFFFF" : "#131417");
-    private IBrush SurfaceBrush => Brush(IsLight ? "#FFFFFF" : "#1A1B20");
-    private IBrush SurfaceRaisedBrush => Brush(IsLight ? "#F1F2F7" : "#24262C");
-    private IBrush OutlineBrush => Brush(IsLight ? "#E4E5EC" : "#303139");
-    private IBrush TextBrush => Brush(IsLight ? "#16171C" : "#F5F5F8");
-    private IBrush MutedBrush => Brush(IsLight ? "#60636F" : "#A3A5AF");
-    private static IBrush AccentBrush => Brush("#6544C8");
-    private IBrush AccentTextBrush => Brush(IsLight ? "#6544C8" : "#B9A5FF");
-    private IBrush GoodBrush => Brush(IsLight ? "#147346" : "#47C98A");
-    private IBrush WarnBrush => Brush(IsLight ? "#835C00" : "#F3C96C");
-    private IBrush BadBrush => Brush(IsLight ? "#B42332" : "#F07479");
-    private static IBrush Brush(string hex) => new SolidColorBrush(Color.Parse(hex));
+    private IBrush Token(string name) => EngineeringTheme.Brush(name, IsLight);
+    private IBrush CanvasBrush => Token("canvas");
+    private IBrush SidebarBrush => Token("nav");
+    private IBrush SurfaceBrush => Token("surface");
+    private IBrush SurfaceRaisedBrush => Token("active");
+    private IBrush OutlineBrush => Token("border");
+    private IBrush TextBrush => Token("text");
+    private IBrush MutedBrush => Token("secondary");
+    private IBrush AccentBrush => Token("primary");
+    private IBrush AccentTextBrush => Token("info");
+    private IBrush GoodBrush => Token("good");
+    private IBrush WarnBrush => Token("warn");
+    private IBrush BadBrush => Token("bad");
 
-    public MainWindow(MainViewModel vm, Action<Uri>? openReleasePage = null)
+    public MainWindow(MainViewModel vm, Action<Uri>? openReleasePage = null, Action? exitApplication = null)
     {
         this.vm = vm;
+        this.exitApplication = exitApplication;
+        EngineeringTheme.Install(Application.Current!);
+        Classes.Add("engineering");
         this.openReleasePage = openReleasePage ?? (uri => Process.Start(new ProcessStartInfo(uri.AbsoluteUri) { UseShellExecute = true }));
         Title = "Zapret Desktop";
-        using (var iconStream = Avalonia.Platform.AssetLoader.Open(new Uri("avares://Zapret.Desktop/Assets/app.ico")))
-            Icon = new WindowIcon(iconStream);
-        Width = 1180;
-        Height = 800;
+        Icon = BrandMark.CreateWindowIcon();
+        Width = 1440;
+        Height = 900;
         MinWidth = 890;
         MinHeight = 620;
-        FontFamily = new FontFamily("Segoe UI Variable, Segoe UI");
-        FontSize = 14;
+        WindowDecorations = WindowDecorations.None;
+        FontFamily = EngineeringTheme.Font;
+        FontSize = 13;
         BuildShell();
-        vm.PropertyChanged += OnViewModelChanged;
-        Opened += async (_, _) =>
+        GotFocus += (_, e) => lastFocusMethod = e.NavigationMethod;
+        PropertyChanged += (_, change) =>
         {
-            if (openedOnce) return;
-            openedOnce = true;
-            try { await vm.InitializeAsync(); }
-            catch (Exception ex) { vm.Log("ERROR", ex.ToString()); }
-            ApplyTheme();
-            statusTimer.Start();
-            if (vm.Settings.CheckUpdates) await CheckForUpdatesAsync();
+            if (change.Property != WindowStateProperty && change.Property != CanResizeProperty) return;
+            foreach (var grip in resizeGrips) grip.IsVisible = CanResize && WindowState == WindowState.Normal;
+            if (maximizeCaptionIcon is not null)
+                maximizeCaptionIcon.Glyph = WindowState == WindowState.Maximized ? WindowCaptionGlyph.Restore : WindowCaptionGlyph.Maximize;
         };
+        SizeChanged += (_, _) =>
+        {
+            var next = Bounds.Width < EngineeringTheme.CompactBreakpoint;
+            if (next == compact) return;
+            compact = next;
+            var offset = contentScroll.Offset;
+            BuildShell();
+            Show(currentPage, offset);
+        };
+        KeyDown += (_, e) =>
+        {
+            if (e.Key != Key.Escape || currentPage != "Главная") return;
+            foreach (var picker in this.GetVisualDescendants().OfType<ComboBox>()) picker.IsDropDownOpen = false;
+            if (expandedConnectionDetails.Count == 0) return;
+            expandedConnectionDetails.Clear();
+            Show(currentPage);
+            e.Handled = true;
+        };
+        vm.PropertyChanged += OnViewModelChanged;
+        Opened += async (_, _) => await InitializeAsync();
         statusTimer.Tick += async (_, _) => await vm.RefreshAsync();
         feedbackTimer.Tick += (_, _) => { feedbackTimer.Stop(); feedbackPanel.IsVisible = false; };
         Closed += (_, _) => { statusTimer.Stop(); feedbackTimer.Stop(); };
@@ -121,6 +153,17 @@ public sealed partial class MainWindow : Window
                 _ = ExitAsync();
             }
         };
+    }
+
+    public Task InitializeAsync() => initialization ??= InitializeCoreAsync();
+
+    private async Task InitializeCoreAsync()
+    {
+        try { await vm.InitializeAsync(); }
+        catch (Exception ex) { vm.Log("ERROR", ex.ToString()); }
+        ApplyTheme();
+        statusTimer.Start();
+        if (vm.Settings.CheckUpdates) await CheckForUpdatesAsync();
     }
 
     public async Task ExitAsync()
@@ -144,6 +187,7 @@ public sealed partial class MainWindow : Window
     private void CompleteExit()
     {
         exitAllowed = true;
+        if (exitApplication is not null) { exitApplication(); return; }
         if (Application.Current?.ApplicationLifetime is IClassicDesktopStyleApplicationLifetime desktop)
             desktop.Shutdown();
     }
@@ -160,13 +204,15 @@ public sealed partial class MainWindow : Window
                 feedbackTimer.Stop();
                 if (feedbackPanel.IsVisible && !vm.MessageIsError) feedbackTimer.Start();
             }
-            sidebarStatus.Text = vm.StatusText;
+            sidebarStatus.Text = SidebarStatusText();
+            sidebarStatus.Foreground = CurrentStatusBrush();
             sidebarStatusDot.Background = CurrentStatusBrush();
+            sidebarStatusPanel.Background = StatusBackground();
             if (e.PropertyName == nameof(MainViewModel.UpstreamVersion) && sidebarUpstreamVersion is not null)
                 sidebarUpstreamVersion.Text = $"zapret {vm.UpstreamVersion}";
             if (e.PropertyName == nameof(MainViewModel.Busy)) RefreshEngineControls();
             if (e.PropertyName == nameof(MainViewModel.PreparingData) && currentPage == "Настройки") Show(currentPage);
-            if (e.PropertyName == nameof(MainViewModel.FiltersNeedRestart) && currentPage == "Настройки") Show(currentPage);
+            if (e.PropertyName == nameof(MainViewModel.FiltersNeedRestart) && currentPage is "Настройки" or "Главная") Show(currentPage);
             if (e.PropertyName == nameof(MainViewModel.TestingStrategies) && currentPage is "Списки" or "Диагностика") Show(currentPage);
             if (e.PropertyName == nameof(MainViewModel.RecoveryRequired) && currentPage is "Настройки" or "Главная") Show(currentPage);
             if (e.PropertyName is nameof(MainViewModel.UpstreamUpdate) or nameof(MainViewModel.DesktopUpdate)
@@ -181,7 +227,8 @@ public sealed partial class MainWindow : Window
                 or nameof(MainViewModel.BestTestStrategy) or nameof(MainViewModel.TestingStrategies)
                 or nameof(MainViewModel.Busy) && currentPage == "Стратегии")
                 RefreshStrategyResults();
-            else if (e.PropertyName == nameof(MainViewModel.ConnectionHealth) && currentPage == "Главная")
+            else if (e.PropertyName is nameof(MainViewModel.ConnectionHealth) or nameof(MainViewModel.CheckingConnection)
+                or nameof(MainViewModel.ConnectionError) && currentPage == "Главная")
                 Show(currentPage);
             else if (e.PropertyName == nameof(MainViewModel.Status) && currentPage is "Главная" or "Стратегии")
                 Show(currentPage);
@@ -195,23 +242,23 @@ public sealed partial class MainWindow : Window
         Background = CanvasBrush;
         Foreground = TextBrush;
         navButtons.Clear();
-        var grid = new Grid { ColumnDefinitions = new ColumnDefinitions("238,*") };
+        var grid = new Grid { ColumnDefinitions = new ColumnDefinitions($"{(Compact ? EngineeringTheme.CompactSidebarWidth : EngineeringTheme.SidebarWidth)},*") };
         var side = new Grid { RowDefinitions = new RowDefinitions("Auto,*,Auto"), Background = SidebarBrush };
-        var sideContent = new StackPanel { Margin = new Thickness(18, 24, 18, 0), Spacing = 3 };
-        var brand = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 10, Margin = new Thickness(8, 0, 0, 36) };
-        brand.Children.Add(BrandMark.Create(48));
-        var wordmark = new StackPanel { VerticalAlignment = VerticalAlignment.Center };
+        var sideContent = new StackPanel { Margin = new Thickness(12, 23, 12, 0), Spacing = 8 };
+        var brand = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 12, Height = 48,
+            Margin = new Thickness(12, 0, 0, 22) };
+        var brandSymbol = BrandMark.Create(EngineeringTheme.BrandMarkSize, SurfaceRaisedBrush, TextBrush);
+        brandSymbol.Name = "BrandSymbol";
+        brandSymbol.VerticalAlignment = VerticalAlignment.Center;
+        brand.Children.Add(brandSymbol);
+        var wordmark = new StackPanel { Name = "BrandWordmark", Spacing = 1, VerticalAlignment = VerticalAlignment.Center };
         wordmark.Children.Add(new TextBlock
         {
-            Text = "Zapret", FontSize = 22, FontWeight = FontWeight.ExtraBold,
-            FontFamily = new FontFamily("fonts:Inter#Inter"), Foreground = TextBrush
+            Text = "Zapret", FontSize = 19, FontWeight = FontWeight.Medium, Foreground = TextBrush
         });
         wordmark.Children.Add(new TextBlock
         {
-            Text = "DESKTOP", FontSize = 10, FontWeight = FontWeight.SemiBold,
-            FontFamily = new FontFamily("fonts:Inter#Inter"),
-            Foreground = Brush(IsLight ? "#52627F" : "#9FB1D9"),
-            Margin = new Thickness(2, -2, 0, 0)
+            Text = "Desktop", FontSize = 12, Foreground = MutedBrush
         });
         brand.Children.Add(wordmark);
         sideContent.Children.Add(brand);
@@ -219,37 +266,48 @@ public sealed partial class MainWindow : Window
         AddNavigation(sideContent, "Главная", FluentIcons.Home);
         AddNavigation(sideContent, "Стратегии", FluentIcons.Apps);
         AddNavigation(sideContent, "Списки", FluentIcons.List);
-        sideContent.Children.Add(new Border { Height = 1, Background = OutlineBrush, Margin = new Thickness(10, 18, 10, 16) });
-        sideContent.Children.Add(SideLabel("СИСТЕМА"));
+        var systemLabel = SideLabel("СИСТЕМА");
+        systemLabel.Margin = new Thickness(12, 20, 0, 12);
+        sideContent.Children.Add(systemLabel);
         AddNavigation(sideContent, "Диагностика", FluentIcons.ShieldCheckmark);
         AddNavigation(sideContent, "Логи", FluentIcons.DocumentText);
         AddNavigation(sideContent, "Настройки", FluentIcons.Settings);
         side.Children.Add(sideContent);
-        var sideFoot = new StackPanel { Margin = new Thickness(25, 16, 18, 25), Spacing = 7 };
-        var online = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 8 };
-        sidebarStatusDot = new Border { Width = 8, Height = 8, CornerRadius = new CornerRadius(4),
+        var sideFoot = new StackPanel { Margin = new Thickness(24, 16, 24, 28), Spacing = 12 };
+        sideFoot.Children.Add(new Border { Height = 1, Background = OutlineBrush, Margin = new Thickness(0, 0, 0, 3) });
+        var online = new Grid { ColumnDefinitions = new ColumnDefinitions("6,*"), ColumnSpacing = 8,
+            VerticalAlignment = VerticalAlignment.Center };
+        sidebarStatusDot = new Border { Width = 6, Height = 6, CornerRadius = new CornerRadius(3),
             Background = CurrentStatusBrush(), VerticalAlignment = VerticalAlignment.Center };
         online.Children.Add(sidebarStatusDot);
-        sidebarStatus = new TextBlock { Text = vm.StatusText, Foreground = TextBrush, FontSize = 13 };
+        sidebarStatus = new TextBlock { Text = SidebarStatusText(), Foreground = CurrentStatusBrush(), FontSize = 12, LineHeight = 18,
+            TextWrapping = TextWrapping.Wrap, VerticalAlignment = VerticalAlignment.Center };
+        Grid.SetColumn(sidebarStatus, 1);
         online.Children.Add(sidebarStatus);
-        sideFoot.Children.Add(online);
-        sideFoot.Children.Add(new TextBlock { Text = $"Zapret Desktop {vm.DesktopVersion}", Foreground = MutedBrush, FontSize = 12 });
-        sidebarUpstreamVersion = new TextBlock { Text = $"zapret {vm.UpstreamVersion}", Foreground = MutedBrush, FontSize = 12 };
-        sideFoot.Children.Add(sidebarUpstreamVersion);
-        sideFoot.Children.Add(new TextBlock { Text = "Автор: fecset · Основа: bol-van, Flowseal", Foreground = MutedBrush, FontSize = 11,
-            TextWrapping = TextWrapping.Wrap });
+        sidebarStatusPanel = new Border { Child = online, Padding = new Thickness(10, 4), Background = StatusBackground() };
+        AutomationProperties.SetAutomationId(sidebarStatusPanel, "SidebarStatus");
+        sideFoot.Children.Add(sidebarStatusPanel);
+        var versions = new StackPanel();
+        versions.Children.Add(new TextBlock { Text = $"Desktop {vm.DesktopVersion}", Foreground = MutedBrush, FontSize = 12, LineHeight = 18 });
+        sidebarUpstreamVersion = new TextBlock { Text = $"zapret {vm.UpstreamVersion}", Foreground = MutedBrush, FontSize = 12, LineHeight = 18 };
+        versions.Children.Add(sidebarUpstreamVersion);
+        sideFoot.Children.Add(versions);
+        sideFoot.Children.Add(new TextBlock { Text = "fecset · bol-van\nFlowseal", Foreground = Token("muted"), FontSize = 12,
+            LineHeight = 18, Margin = new Thickness(0, 6, 0, 0) });
         Grid.SetRow(sideFoot, 2);
         side.Children.Add(sideFoot);
         Grid.SetColumn(side, 0);
         grid.Children.Add(side);
 
-        var main = new Grid { RowDefinitions = new RowDefinitions("*,Auto") };
+        var main = new Grid { RowDefinitions = new RowDefinitions($"{EngineeringTheme.TitleBarHeight},*,Auto") };
         contentScroll = new ScrollViewer
         {
-            Content = page, Padding = new Thickness(30, 25, 30, 12),
+            Content = page, Padding = PagePadding(),
             VerticalScrollBarVisibility = Avalonia.Controls.Primitives.ScrollBarVisibility.Auto
         };
+        AutomationProperties.SetAutomationId(contentScroll, "PageScroll");
         contentHost = new ContentControl { Content = contentScroll };
+        Grid.SetRow(contentHost, 1);
         main.Children.Add(contentHost);
         footer = new TextBlock
         {
@@ -260,38 +318,65 @@ public sealed partial class MainWindow : Window
         feedbackPanel = new Grid
         {
             ColumnDefinitions = new ColumnDefinitions("*,Auto"),
-            Margin = new Thickness(30, 8, 30, 18), IsVisible = !string.IsNullOrWhiteSpace(vm.Message)
+            Margin = new Thickness(32, 8, 32, 18), IsVisible = !string.IsNullOrWhiteSpace(vm.Message)
         };
         var dismiss = MessageDismissButton();
         Grid.SetColumn(dismiss, 1);
         feedbackPanel.Children.Add(footer);
         feedbackPanel.Children.Add(dismiss);
-        Grid.SetRow(feedbackPanel, 1);
+        Grid.SetRow(feedbackPanel, 2);
         main.Children.Add(feedbackPanel);
         Grid.SetColumn(main, 1);
         grid.Children.Add(main);
-        Content = grid;
+        var root = new Grid();
+        root.Children.Add(grid);
+        var titlebar = new Grid { Height = EngineeringTheme.TitleBarHeight,
+            ColumnDefinitions = new ColumnDefinitions("*,Auto"), Background = CanvasBrush };
+        AutomationProperties.SetAutomationId(titlebar, "WindowTitleBar");
+        var titlebarRule = new Border { Height = 1, Background = OutlineBrush, VerticalAlignment = VerticalAlignment.Bottom,
+            IsHitTestVisible = false };
+        Grid.SetColumnSpan(titlebarRule, 2);
+        titlebar.Children.Add(titlebarRule);
+        titlebar.PointerPressed += (_, e) =>
+        {
+            if (!e.GetCurrentPoint(this).Properties.IsLeftButtonPressed || e.Source is Button) return;
+            if (e.ClickCount == 2) WindowState = WindowState == WindowState.Maximized ? WindowState.Normal : WindowState.Maximized;
+            else BeginMoveDrag(e);
+        };
+        var chrome = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 0, 12, 0) };
+        AddWindowControl(chrome, "Свернуть", WindowCaptionGlyph.Minimize, () => WindowState = WindowState.Minimized);
+        AddWindowControl(chrome, "Развернуть или восстановить", WindowCaptionGlyph.Maximize, () =>
+            WindowState = WindowState == WindowState.Maximized ? WindowState.Normal : WindowState.Maximized);
+        AddWindowControl(chrome, "Закрыть", WindowCaptionGlyph.Close, Close);
+        Grid.SetColumn(chrome, 1);
+        titlebar.Children.Add(chrome);
+        main.Children.Add(titlebar);
+        AddResizeGrips(root);
+        Content = root;
         UpdateNavigation();
     }
 
     private TextBlock SideLabel(string label) => new()
     {
-        Text = label, Foreground = MutedBrush, FontSize = 12, FontWeight = FontWeight.SemiBold,
-        Margin = new Thickness(13, 0, 0, 12)
+        Text = label, Foreground = MutedBrush, FontSize = 12,
+        Margin = new Thickness(12, 0, 0, 15)
     };
     private void AddNavigation(StackPanel container, string name, Geometry icon)
     {
         var content = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 12 };
-        content.Children.Add(new PathIcon { Data = icon, Width = 20, Height = 20,
+        content.Children.Add(new PathIcon { Data = icon, Width = 18, Height = 18,
             VerticalAlignment = VerticalAlignment.Center });
-        content.Children.Add(new TextBlock { Text = name, FontSize = 14, VerticalAlignment = VerticalAlignment.Center });
+        content.Children.Add(new TextBlock { Text = name, FontSize = 13, VerticalAlignment = VerticalAlignment.Center });
         var button = new Button
         {
-            Content = content, Height = 44, HorizontalAlignment = HorizontalAlignment.Stretch,
-            HorizontalContentAlignment = HorizontalAlignment.Left, Padding = new Thickness(13, 0),
+            Content = content, Height = 40, HorizontalAlignment = HorizontalAlignment.Stretch,
+            HorizontalContentAlignment = HorizontalAlignment.Left, VerticalContentAlignment = VerticalAlignment.Center, Padding = new Thickness(12, 0),
             Background = Brushes.Transparent, Foreground = MutedBrush, BorderThickness = new Thickness(0),
-            CornerRadius = new CornerRadius(9), Margin = new Thickness(0, 0, 0, 3)
+            CornerRadius = new CornerRadius(3)
         };
+        button.Classes.Add("engineering");
+        AutomationProperties.SetAutomationId(button, "Navigation:" + name);
+        AutomationProperties.SetName(button, name);
         button.Click += (_, _) => Show(name);
         navButtons[name] = button;
         container.Children.Add(button);
@@ -302,11 +387,18 @@ public sealed partial class MainWindow : Window
         {
             button.Background = name == currentPage ? SurfaceRaisedBrush : Brushes.Transparent;
             button.Foreground = name == currentPage ? TextBrush : MutedBrush;
-            button.FontWeight = name == currentPage ? FontWeight.SemiBold : FontWeight.Normal;
+            button.BorderThickness = new Thickness(name == currentPage ? 2 : 0, 0, 0, 0);
+            button.BorderBrush = TextBrush;
+            AutomationProperties.SetHelpText(button, name == currentPage ? "Текущий раздел" : null);
         }
     }
     private void Show(string name, Vector? scrollOffset = null)
     {
+        if (name != currentPage) { pendingFocusId = null; pendingFocusName = null; }
+        var focused = name == currentPage ? FocusManager?.GetFocusedElement() as Control : null;
+        var focusId = focused is null ? pendingFocusId : AutomationProperties.GetAutomationId(focused);
+        var focusName = focused is null ? pendingFocusName : AutomationProperties.GetName(focused);
+        var focusMethod = focused is null ? pendingFocusMethod : lastFocusMethod;
         var offset = scrollOffset ?? (name == currentPage ? contentScroll.Offset : default);
         currentPage = name;
         DetachPage();
@@ -330,6 +422,27 @@ public sealed partial class MainWindow : Window
         // page has been measured, otherwise ScrollViewer clamps the offset to zero.
         UpdateLayout();
         contentScroll.Offset = offset;
+        if (!string.IsNullOrEmpty(focusId) || !string.IsNullOrEmpty(focusName))
+        {
+            var replacement = this.GetVisualDescendants().OfType<Control>().FirstOrDefault(control =>
+                !string.IsNullOrEmpty(focusId) ? AutomationProperties.GetAutomationId(control) == focusId :
+                    AutomationProperties.GetName(control) == focusName);
+            if (replacement?.Focus(focusMethod) == true)
+            { pendingFocusId = null; pendingFocusName = null; }
+            else if (replacement is not null)
+            { pendingFocusId = focusId; pendingFocusName = focusName; pendingFocusMethod = focusMethod; }
+        }
+    }
+
+    private void RememberPageFocus()
+    {
+        if (FocusManager?.GetFocusedElement() is not Control focused || focused == this) return;
+        var id = AutomationProperties.GetAutomationId(focused);
+        var name = AutomationProperties.GetName(focused);
+        if (string.IsNullOrEmpty(id) && string.IsNullOrEmpty(name)) return;
+        pendingFocusId = id;
+        pendingFocusName = name;
+        pendingFocusMethod = lastFocusMethod;
     }
 
     private async Task CheckForUpdatesAsync()
@@ -469,32 +582,42 @@ public sealed partial class MainWindow : Window
         fillLayout.Children.Add(list);
         contentHost.Content = new Border
         {
-            Padding = new Thickness(30, 25, 30, 12),
+            Padding = PagePadding(),
             Child = fillLayout
         };
     }
 
     private void Heading(string title, string subtitle)
     {
-        var header = new StackPanel { Spacing = 5, Margin = new Thickness(0, 0, 0, 7) };
-        header.Children.Add(Text(title, 28, FontWeight.SemiBold));
-        header.Children.Add(Text(subtitle, 14, color: MutedBrush));
+        page.Spacing = Compact ? EngineeringTheme.CompactSectionGap : EngineeringTheme.SectionGap;
+        var header = new StackPanel { Spacing = Compact ? 6 : 8, Margin = new Thickness(0, 0, 0, Compact ? 2 : 8) };
+        var titleText = Text(title, 27, FontWeight.Medium);
+        titleText.Height = 40;
+        var caption = Text(subtitle, 13, color: MutedBrush);
+        caption.MinHeight = 20;
+        header.Children.Add(titleText);
+        header.Children.Add(caption);
         page.Children.Add(header);
     }
     private TextBlock Text(string value, double size = 14, FontWeight? weight = null, IBrush? color = null) => new()
     {
-        Text = value, FontSize = Math.Max(size, 13), FontWeight = weight ?? FontWeight.Normal,
+        Text = value, FontSize = Math.Max(size, 12), FontWeight = weight == FontWeight.SemiBold ? FontWeight.Medium : weight ?? FontWeight.Normal,
         Foreground = color ?? TextBrush, TextWrapping = TextWrapping.Wrap
     };
-    private Border Panel(Control content, int padding = 20) => new()
+    private Border Panel(Control content, int padding = 20, bool registrationMarks = true) => registrationMarks
+        ? new EngineeringSection(content, new Thickness(EngineeringTheme.SectionPadding))
+        {
+            Background = SurfaceBrush, BorderBrush = OutlineBrush, BorderThickness = new Thickness(1), NodeBrush = Token("node")
+        }
+        : new Border
     {
         Child = content, Padding = new Thickness(padding), Background = SurfaceBrush,
-        BorderBrush = OutlineBrush, BorderThickness = new Thickness(1), CornerRadius = new CornerRadius(13)
+        BorderBrush = OutlineBrush, BorderThickness = new Thickness(1), CornerRadius = new CornerRadius(0)
     };
     private Border Pill(string label, IBrush color, IBrush? background = null) => new()
     {
         Background = background ?? SurfaceRaisedBrush, Padding = new Thickness(9, 4),
-        CornerRadius = new CornerRadius(12), HorizontalAlignment = HorizontalAlignment.Left,
+        CornerRadius = new CornerRadius(3), HorizontalAlignment = HorizontalAlignment.Left,
         Child = Text(label, 12, FontWeight.SemiBold, color)
     };
     private Button EngineButton(string label, Func<Task> action, Func<bool>? canExecute = null,
@@ -516,14 +639,16 @@ public sealed partial class MainWindow : Window
     {
         var button = new ActionButton
         {
-            Content = label, MinHeight = 40, Padding = new Thickness(15, 8),
+            Content = label, Height = EngineeringTheme.ControlHeight, MinHeight = EngineeringTheme.ControlHeight, Padding = new Thickness(16, 8),
             HorizontalContentAlignment = HorizontalAlignment.Center,
             VerticalContentAlignment = VerticalAlignment.Center,
-            Background = primary ? AccentBrush : danger ? Brush(IsLight ? "#FDE8E9" : "#40262A") : SurfaceRaisedBrush,
-            Foreground = primary ? Brushes.White : danger ? BadBrush : TextBrush,
-            BorderThickness = new Thickness(0), CornerRadius = new CornerRadius(8),
-            FontSize = 14, FontWeight = FontWeight.SemiBold
+            Background = primary ? AccentBrush : danger ? Token("badBg") : SurfaceBrush,
+            Foreground = primary ? Token("onPrimary") : danger ? BadBrush : TextBrush,
+            BorderBrush = danger ? BadBrush : Token("control"),
+            BorderThickness = new Thickness(1), CornerRadius = new CornerRadius(EngineeringTheme.ControlRadius),
+            FontSize = 13, FontWeight = FontWeight.Medium
         };
+        StyleAction(button, primary, danger);
         TrackButton(button, activityKey ?? currentPage + ":" + label, action, isLoading);
         return button;
     }
@@ -539,13 +664,15 @@ public sealed partial class MainWindow : Window
                 HorizontalAlignment = HorizontalAlignment.Center,
                 VerticalAlignment = VerticalAlignment.Center
             },
-            Width = 44, Height = 40, MinWidth = 44, MinHeight = 40, Padding = new Thickness(0),
+            Width = 44, Height = EngineeringTheme.ControlHeight, MinWidth = 44, MinHeight = EngineeringTheme.ControlHeight, Padding = new Thickness(0),
             HorizontalContentAlignment = HorizontalAlignment.Center,
             VerticalContentAlignment = VerticalAlignment.Center,
-            Background = primary ? AccentBrush : danger ? Brush(IsLight ? "#FDE8E9" : "#40262A") : SurfaceRaisedBrush,
-            Foreground = primary ? Brushes.White : danger ? BadBrush : TextBrush,
-            BorderThickness = new Thickness(0), CornerRadius = new CornerRadius(8)
+            Background = primary ? AccentBrush : danger ? Token("badBg") : SurfaceBrush,
+            Foreground = primary ? Token("onPrimary") : danger ? BadBrush : TextBrush,
+            BorderBrush = danger ? BadBrush : Token("control"),
+            BorderThickness = new Thickness(1), CornerRadius = new CornerRadius(EngineeringTheme.ControlRadius)
         };
+        StyleAction(button, primary, danger);
         AutomationProperties.SetName(button, label);
         ToolTip.SetTip(button, label);
         TrackButton(button, activityKey ?? currentPage + ":" + label, action, isLoading);
@@ -553,9 +680,11 @@ public sealed partial class MainWindow : Window
     }
     private ComboBox StrategyPicker()
     {
-        var combo = Dropdown(vm.Strategies, vm.SelectedStrategy, 260);
+        var combo = Dropdown(vm.Strategies, vm.SelectedStrategy, 392);
+        AutomationProperties.SetAutomationId(combo, "LaunchStrategyPicker");
+        AutomationProperties.SetName(combo, "Стратегия для следующего запуска");
         combo.ItemTemplate = new FuncDataTemplate<ZapretStrategy>((item, _) =>
-            Text(item?.DisplayName ?? "Выберите стратегию", 14));
+            Text(item?.DisplayName ?? "Выберите стратегию", 13));
         combo.SelectionChanged += async (_, _) =>
         {
             // Resetting ItemsSource during import/update is not a user selection.
@@ -567,11 +696,11 @@ public sealed partial class MainWindow : Window
     }
     private ComboBox Dropdown(IEnumerable items, object? selected, double width) => new()
     {
-        ItemsSource = items, SelectedItem = selected, Width = width, Height = 40,
-        Background = SurfaceRaisedBrush, Foreground = TextBrush,
-        BorderBrush = OutlineBrush, BorderThickness = new Thickness(1),
-        CornerRadius = new CornerRadius(8), Padding = new Thickness(12, 0),
-        FontSize = 14, VerticalAlignment = VerticalAlignment.Center,
+        ItemsSource = items, SelectedItem = selected, Width = width, Height = EngineeringTheme.ControlHeight,
+        Background = SurfaceBrush, Foreground = TextBrush,
+        BorderBrush = Token("control"), BorderThickness = new Thickness(1),
+        CornerRadius = new CornerRadius(EngineeringTheme.ControlRadius), Padding = new Thickness(15, 0),
+        FontSize = 13, VerticalAlignment = VerticalAlignment.Center,
         VerticalContentAlignment = VerticalAlignment.Center
     };
     private void ApplyTheme()
@@ -581,6 +710,7 @@ public sealed partial class MainWindow : Window
         {
             "Light" => ThemeVariant.Light, "Dark" => ThemeVariant.Dark, _ => ThemeVariant.Default
         };
+        RequestedThemeVariant = Application.Current.RequestedThemeVariant;
         BuildShell();
         Show(currentPage, offset);
     }
@@ -594,6 +724,48 @@ public sealed partial class MainWindow : Window
     {
         ZapretRunState.Running or ZapretRunState.ServiceRunning => GoodBrush,
         ZapretRunState.External => WarnBrush,
-        _ => BadBrush
+        _ => vm.Status is null || vm.Status.ServiceStatus is "Unknown" or "AccessDenied" ? WarnBrush : MutedBrush
     };
+
+    private Thickness PagePadding() => new(Compact ? EngineeringTheme.CompactGutter : EngineeringTheme.Gutter,
+        (Compact ? 32 : 40) - EngineeringTheme.TitleBarHeight,
+        Compact ? EngineeringTheme.CompactGutter : EngineeringTheme.Gutter, 28);
+    private string SidebarStatusText() => vm.Status?.State switch
+    {
+        ZapretRunState.Running or ZapretRunState.ServiceRunning => "Zapret активен",
+        ZapretRunState.External => "Внешний запуск",
+        _ => vm.Status is null || vm.Status.ServiceStatus is "Unknown" or "AccessDenied" ? "Не подтверждено" : "Остановлен"
+    };
+    private IBrush StatusBackground() => vm.Status?.State switch
+    {
+        ZapretRunState.Running or ZapretRunState.ServiceRunning => Token("goodBg"),
+        ZapretRunState.External => Token("warnBg"),
+        _ => SurfaceRaisedBrush
+    };
+    private static void StyleAction(Button button, bool primary = false, bool danger = false)
+    {
+        button.Classes.Add("engineering");
+        if (primary) button.Classes.Add("primary");
+        if (danger) button.Classes.Add("danger");
+    }
+    private void AddWindowControl(StackPanel parent, string label, WindowCaptionGlyph glyph, Action action)
+    {
+        var icon = new WindowCaptionIcon { Glyph = glyph, Foreground = MutedBrush,
+            HorizontalAlignment = HorizontalAlignment.Center, VerticalAlignment = VerticalAlignment.Center };
+        if (glyph == WindowCaptionGlyph.Maximize)
+        {
+            maximizeCaptionIcon = icon;
+            icon.Glyph = WindowState == WindowState.Maximized ? WindowCaptionGlyph.Restore : WindowCaptionGlyph.Maximize;
+        }
+        var button = new Button { Width = 40, Height = EngineeringTheme.TitleBarHeight, Background = Brushes.Transparent,
+            Foreground = MutedBrush, BorderThickness = new Thickness(0), Padding = new Thickness(0),
+            HorizontalContentAlignment = HorizontalAlignment.Center, VerticalContentAlignment = VerticalAlignment.Center,
+            Content = icon };
+        StyleAction(button);
+        AutomationProperties.SetName(button, label);
+        AutomationProperties.SetAutomationId(button, "WindowCommand:" + glyph);
+        ToolTip.SetTip(button, label);
+        button.Click += (_, _) => action();
+        parent.Children.Add(button);
+    }
 }

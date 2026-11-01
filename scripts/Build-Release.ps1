@@ -92,7 +92,8 @@ try {
     }
     foreach ($required in @('Zapret.Desktop.exe', 'LICENSE', 'THIRD_PARTY_NOTICES.md', 'README.md',
         'licenses/Zapret-LICENSE.txt', 'licenses/WinDivert-LICENSE.txt', 'licenses/Avalonia-LICENSE.md',
-        'licenses/DotNet-LICENSE.txt', 'licenses/Runtime-NOTICES.txt', 'licenses/Inter-OFL.txt', 'licenses/FluentIcons-LICENSE.txt',
+        'licenses/DotNet-LICENSE.txt', 'licenses/Runtime-NOTICES.txt', 'licenses/Inter-OFL.txt', 'licenses/JetBrainsMono-OFL.txt', 'licenses/FluentIcons-LICENSE.txt',
+        'licenses/Cygwin-NEWLIB-NOTICES.txt', 'licenses/Winws-NOTICES.txt',
         'licenses/Cygwin-LICENSE.txt', 'licenses/LGPL-3.0.txt', 'licenses/GPL-3.0.txt',
         'zapret/service.bat', 'zapret/bin/winws.exe', 'zapret/bin/WinDivert.dll', 'zapret/bin/WinDivert64.sys',
         'zapret/lists/list-general.txt', 'zapret/utils/test zapret.ps1')) {

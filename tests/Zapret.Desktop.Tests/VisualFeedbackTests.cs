@@ -307,7 +307,7 @@ public sealed class VisualFeedbackTests
         try
         {
             var texts = window.GetLogicalDescendants().OfType<TextBlock>().Select(t => t.Text ?? "").ToArray();
-            Assert.Contains(texts, t => t == $"Zapret Desktop {app.ViewModel.DesktopVersion}");
+            Assert.Contains(texts, t => t == $"Desktop {app.ViewModel.DesktopVersion}");
             Assert.Contains(texts, t => t == $"zapret {app.ViewModel.UpstreamVersion}");
         }
         finally { window.Hide(); }

@@ -6,6 +6,24 @@ namespace Zapret.Desktop.Tests;
 
 public sealed class SettingsSaveTests
 {
+    [Fact]
+    public async Task ChangingOnlyStartInTrayIsPersisted()
+    {
+        var store = new FailingSettingsStore { FailNextSave = false };
+        var viewModel = CreateViewModel(store, new StartupState());
+        viewModel.Draft.StartWithWindows = true;
+        await viewModel.SaveSettingsAsync();
+        viewModel.Draft.StartInTray = true;
+        await viewModel.SaveSettingsAsync();
+        Assert.Equal(2, store.SaveAttempts);
+        Assert.True(store.Saved.StartInTray);
+        Assert.True(viewModel.Settings.StartInTray);
+        var draft = new SettingsDraft();
+        draft.Load(store.Saved, new(GameFilterMode.Disabled, "1024-65535", "1024-65535"), IpSetMode.None);
+        Assert.True(draft.StartInTray);
+        Assert.True(draft.ToSettings(store.Saved).StartInTray);
+    }
+
     [Theory]
     [InlineData(true)]
     [InlineData(false)]

@@ -17,10 +17,7 @@ public sealed class App : Application
     public override void Initialize()
     {
         Styles.Add(new FluentTheme());
-        Styles.Add(new StyleInclude(new Uri("avares://Zapret.Desktop/"))
-        {
-            Source = new Uri("avares://Zapret.Desktop/Styles/Dropdowns.axaml")
-        });
+        EngineeringTheme.Install(this);
     }
     public override void OnFrameworkInitializationCompleted()
     {
@@ -57,16 +54,30 @@ public sealed class App : Application
             var provider = services.BuildServiceProvider();
             var vm = provider.GetRequiredService<MainViewModel>();
             var window = new MainWindow(vm);
-            desktop.MainWindow = window;
             desktop.ShutdownMode = ShutdownMode.OnExplicitShutdown;
             ConfigureTray(desktop, window, vm);
+            // Leave MainWindow unset until the lifetime's automatic Show has passed.
+            // Hidden autostart still initializes the engine, status timer and tray.
+            Dispatcher.UIThread.Post(async () =>
+            {
+                desktop.MainWindow = window;
+                try
+                {
+                    var settings = await provider.GetRequiredService<ISettingsStore>().LoadAsync();
+                    await WindowStartup.StartAsync(window, settings, desktop.Args ?? []);
+                }
+                catch (Exception ex)
+                {
+                    window.Show();
+                    vm.ReportError("Не удалось выполнить автозапуск", ex);
+                }
+            });
         }
         base.OnFrameworkInitializationCompleted();
     }
     private void ConfigureTray(IClassicDesktopStyleApplicationLifetime desktop, MainWindow window, MainViewModel vm)
     {
-        using var iconStream = AssetLoader.Open(new Uri("avares://Zapret.Desktop/Assets/app.ico"));
-        var tray = new TrayIcon { Icon = new WindowIcon(iconStream), ToolTipText = "Zapret Desktop" };
+        var tray = new TrayIcon { Icon = BrandMark.CreateWindowIcon(), ToolTipText = "Zapret Desktop" };
         var menu = new NativeMenu();
         var status = new NativeMenuItem { Header = "🔴 Статус: Остановлен", IsEnabled = false };
         var strategy = new NativeMenuItem { Header = "Выбрана: —", IsEnabled = false };

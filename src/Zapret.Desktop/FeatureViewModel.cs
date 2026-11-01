@@ -6,6 +6,7 @@ namespace Zapret.Desktop;
 public sealed partial class MainViewModel
 {
     private ConnectionHealthResult? connectionHealth;
+    private string? connectionError;
     private CancellationTokenSource? connectionCancellation;
     private long connectionVersion;
     private ManagedUpdatePlan? distributionUpdatePlan;
@@ -21,6 +22,7 @@ public sealed partial class MainViewModel
     public ObservableCollection<UserDataBackupInfo> Backups { get; } = [];
     public ObservableCollection<StrategyHistoryEntry> TestHistory { get; } = [];
     public ConnectionHealthResult? ConnectionHealth { get => connectionHealth; private set => SetProperty(ref connectionHealth, value); }
+    public string? ConnectionError { get => connectionError; private set => SetProperty(ref connectionError, value); }
     public ManagedUpdatePlan? DistributionUpdatePlan { get => distributionUpdatePlan; private set => SetProperty(ref distributionUpdatePlan, value); }
     public ManagedUpdatePlan? DesktopUpdatePlan { get => desktopUpdatePlan; private set => SetProperty(ref desktopUpdatePlan, value); }
     public ManagedUpdateResult? LastDistributionUpdate { get => lastDistributionUpdate; private set => SetProperty(ref lastDistributionUpdate, value); }
@@ -173,6 +175,7 @@ public sealed partial class MainViewModel
         if (connection is null || exitRequested) return false;
         using var cancellation = new CancellationTokenSource();
         connectionCancellation = cancellation;
+        ConnectionError = null;
         OnPropertyChanged(nameof(CheckingConnection));
         try
         {
@@ -183,7 +186,12 @@ public sealed partial class MainViewModel
             return true;
         }
         catch (OperationCanceledException) when (cancellation.IsCancellationRequested) { }
-        catch (Exception ex) { Log("WARN", "Не удалось проверить доступность сервисов: " + ex.Message); }
+        catch (Exception ex)
+        {
+            if (connectionCancellation == cancellation && !cancellation.IsCancellationRequested)
+                ConnectionError = ex.Message;
+            Log("WARN", "Не удалось проверить доступность сервисов: " + ex.Message);
+        }
         finally
         {
             if (connectionCancellation == cancellation)
@@ -201,6 +209,7 @@ public sealed partial class MainViewModel
         {
             CancelConnectionCheck();
             ConnectionHealth = null;
+            ConnectionError = null;
             await action();
             completedVersion = connectionVersion;
         }, skipIfBusy: true, allowDuringPreparation: true);

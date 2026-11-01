@@ -183,6 +183,7 @@ public sealed class DataProtectionTests
     [InlineData("{\"Theme\":\"Dark\",\"Theme\":\"Light\"}")]
     [InlineData("{\"Theme\":\"Unknown\"}")]
     [InlineData("{\"StartWithWindows\":\"true\"}")]
+    [InlineData("{\"StartInTray\":\"true\"}")]
     public async Task ImportRejectsInvalidSettingsEvenWithMatchingArchiveChecksum(string json)
     {
         using var fixture = new BackupFixture();

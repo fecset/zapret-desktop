@@ -10,6 +10,7 @@ public sealed partial class SettingsDraft : ObservableObject
     [ObservableProperty] private string udpPorts = "1024-65535";
     [ObservableProperty] private IpSetMode ipSetMode;
     [ObservableProperty] private bool startWithWindows;
+    [ObservableProperty] private bool startInTray;
     [ObservableProperty] private bool startZapretOnLaunch;
     [ObservableProperty] private bool minimizeToTray = true;
     [ObservableProperty] private bool checkUpdates = true;
@@ -23,6 +24,7 @@ public sealed partial class SettingsDraft : ObservableObject
         SetGame(game);
         IpSetMode = ipset;
         StartWithWindows = settings.StartWithWindows;
+        StartInTray = settings.StartInTray;
         StartZapretOnLaunch = settings.StartZapretOnLaunch;
         MinimizeToTray = settings.MinimizeToTray;
         CheckUpdates = settings.CheckUpdates;
@@ -40,7 +42,7 @@ public sealed partial class SettingsDraft : ObservableObject
     public DesktopSettings ToSettings(DesktopSettings current) => new()
     {
         SelectedStrategyId = current.SelectedStrategyId, LogLevel = current.LogLevel,
-        StartWithWindows = StartWithWindows, StartZapretOnLaunch = StartZapretOnLaunch,
+        StartWithWindows = StartWithWindows, StartInTray = StartInTray, StartZapretOnLaunch = StartZapretOnLaunch,
         MinimizeToTray = MinimizeToTray, CheckUpdates = CheckUpdates,
         CheckConnectionAfterStart = CheckConnectionAfterStart, Theme = Theme
     };

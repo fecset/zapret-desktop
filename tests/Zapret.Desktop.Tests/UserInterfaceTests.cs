@@ -18,7 +18,8 @@ public static class TestAppBuilder
 {
     public static AppBuilder BuildAvaloniaApp() => AppBuilder.Configure<TestAvaloniaApp>()
         .WithInterFont()
-        .UseHeadless(new AvaloniaHeadlessPlatformOptions());
+        .UseSkia()
+        .UseHeadless(new AvaloniaHeadlessPlatformOptions { UseHeadlessDrawing = false });
 }
 
 public sealed class TestAvaloniaApp : Application
