@@ -1,6 +1,6 @@
 # ![Значок Zapret Desktop](src/Zapret.Desktop/Assets/app-32.png) Zapret Desktop
 
-**Приложение для управления Zapret на Windows:** запуск, выбор и проверка стратегий, редактирование списков и обновления.
+**Приложение для управления Zapret на Windows:** запуск, выбор и проверка стратегий, редактирование списков, встроенный Telegram-прокси и обновления.
 
 `Windows 10/11 x64` · `v0.4.0`
 
@@ -8,7 +8,7 @@
 
 ## 🖥️ Интерфейс
 
-![Главная страница Zapret Desktop](UI.png)
+![Главная страница Zapret Desktop 0.4.0](UI.png)
 
 ## ▶️ Установка и запуск
 
@@ -19,6 +19,18 @@
 
 Устанавливать .NET отдельно не требуется. Подходящая стратегия зависит от провайдера: если соединение не работает, попробуйте другую или запустите автоподбор.
 
+## ✈️ Telegram прокси
+
+Встроенный MTProto-прокси для Telegram Desktop работает внутри `Zapret.Desktop.exe`; отдельный EXE или Python не нужен.
+
+1. Откройте раздел «Telegram прокси» и нажмите «Запустить прокси».
+2. Нажмите «Открыть в Telegram» и подтвердите добавление прокси.
+3. Если порт 1443 занят, измените его в настройках прокси и сохраните.
+
+Ключ создаётся при первом запуске и хранится с защитой Windows DPAPI. Автозапуск по умолчанию выключен. При сворачивании в трей прокси продолжает работать, при полном выходе Desktop останавливается. Zapret и Telegram прокси управляются независимо.
+
+Подробнее: [подключение, настройки и ограничения](docs/TELEGRAM_PROXY.md).
+
 ## 🗂️ Возможности
 
 | Раздел | Возможности |
@@ -26,6 +38,7 @@
 | Главная | Запуск и остановка Zapret, состояние движка, драйвера и службы, проверка YouTube и Discord |
 | Стратегии | Выбор стратегии, автоподбор и история результатов |
 | Списки | Просмотр и редактирование доменов и IP-адресов |
+| Telegram прокси | Встроенный MTProto-прокси для Telegram Desktop: запуск, ключ, порт, маршруты и статистика |
 | Диагностика | Проверка файлов, службы, драйвера, DNS, hosts и возможных конфликтов |
 | Логи | Журнал действий и ошибок |
 | Настройки | Фильтры, служба Windows, автозапуск, тема, резервные копии, IPSet, hosts, payload и обновления |
@@ -76,12 +89,6 @@ dotnet run --project src/Zapret.Desktop/Zapret.Desktop.csproj
 
 ## ⚖️ Лицензии
 
-Код Zapret Desktop © [fecset](https://github.com/fecset), [MIT](LICENSE). Уведомления bol-van и Flowseal находятся в [`zapret/LICENSE.txt`](zapret/LICENSE.txt). WinDivert распространяется по LGPLv3 или GPLv2 на выбор — [текст лицензии](licenses/WinDivert-LICENSE.txt). Лицензии остальных компонентов перечислены в [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
+Код Zapret Desktop © [fecset](https://github.com/fecset), [MIT](LICENSE). Лицензия и уведомления дистрибутива zapret от bol-van и Flowseal находятся в [`zapret/LICENSE.txt`](zapret/LICENSE.txt). WinDivert распространяется по LGPLv3 или GPLv2 на выбор — [текст лицензии](licenses/WinDivert-LICENSE.txt).
 
-## Telegram прокси
-
-Встроенный локальный MTProto-прокси для Telegram Desktop запускается в разделе «Telegram прокси». Нажмите «Запустить прокси», затем «Открыть в Telegram» и подтвердите добавление. Отдельный EXE или Python не нужны. Автозапуск выключен по умолчанию; при сворачивании в трей прокси продолжает работать, при полном выходе Desktop останавливается. Zapret и Telegram прокси управляются независимо.
-
-Zapret Desktop использует два независимых upstream-проекта Flowseal: [zapret-discord-youtube](https://github.com/Flowseal/zapret-discord-youtube), основанный на [zapret bol-van](https://github.com/bol-van/zapret), и [TG WS Proxy](https://github.com/Flowseal/tg-ws-proxy). Telegram прокси — адаптированная реализация на C# на основе проекта Flowseal, а не оригинальная разработка автора Desktop. Нативный модуль обновляется только вместе с Desktop.
-
-[Подключение, настройки, ограничения и проверки](docs/TELEGRAM_PROXY.md).
+Telegram прокси — адаптированная C#-реализация [TG WS Proxy](https://github.com/Flowseal/tg-ws-proxy) © Flowseal, [MIT](licenses/TG-WS-Proxy-LICENSE.txt). Лицензии остальных компонентов и условия использования логотипа Telegram перечислены в [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).

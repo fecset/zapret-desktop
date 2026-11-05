@@ -82,6 +82,34 @@ public sealed class TelegramProxyTests
         finally { window.Hide(); }
     }
     [AvaloniaFact]
+    public async Task HomeScreenshotShowsCurrentVersionAndTelegramCard()
+    {
+        await using var server = new TelegramProxyServer();
+        var proxy = new TelegramProxyViewModel(server, new MemoryStore { Value = new TelegramProxyOptions { Port = 1443, Secret = new string('1', 32) } });
+        using var app = new TestApplication(telegramProxy: proxy, connection: new AvailableHealth());
+        Directory.CreateDirectory(app.Distribution.BinDirectory);
+        foreach (var name in new[] { "winws.exe", "WinDivert.dll", "WinDivert64.sys" })
+            File.WriteAllText(Path.Combine(app.Distribution.BinDirectory, name), "test fixture");
+        File.WriteAllText(Path.Combine(app.Distribution.Root, "service.bat"), "set LOCAL_VERSION=1.10.4");
+        File.WriteAllText(Path.Combine(app.Distribution.ListsDirectory, "list-general.txt"), "example.test");
+        await app.Settings.SaveAsync(new DesktopSettings { Theme = "Dark", CheckUpdates = false, CheckConnectionAfterStart = false }, TestContext.Current.CancellationToken);
+        var window = new MainWindow(app.ViewModel) { Width = 1440, Height = 1120 }; window.Show(); await window.InitializeAsync();
+        try
+        {
+            Dispatcher.UIThread.RunJobs(); window.UpdateLayout();
+            Assert.Contains(window.GetLogicalDescendants().OfType<TextBlock>(), t => t.Text == "Telegram прокси");
+            Assert.Contains(window.GetLogicalDescendants().OfType<TextBlock>(), t => t.Text == "Desktop " + app.ViewModel.DesktopVersion);
+            Assert.Contains(window.GetLogicalDescendants().OfType<TextBlock>(), t => t.Text == "127.0.0.1:1443");
+            var output = Environment.GetEnvironmentVariable("TELEGRAM_PROXY_SCREENSHOTS");
+            if (string.IsNullOrEmpty(output)) return;
+            Directory.CreateDirectory(output);
+            var path = Path.Combine(output, "README-v0.4.0.png");
+            window.CaptureRenderedFrame()?.Save(path, new PngBitmapEncoderOptions());
+            Assert.True(File.Exists(path));
+        }
+        finally { window.Hide(); }
+    }
+    [AvaloniaFact]
     public async Task KeyRotationKeepsActivePortAndPreservesPendingSettings()
     {
         await using var server = new TelegramProxyServer();
