@@ -28,7 +28,7 @@
 - Source: https://github.com/Flowseal/tg-ws-proxy
 - License: MIT; complete original copyright and license: licenses/TG-WS-Proxy-LICENSE.txt.
 - C# port/adaptation of the networking functionality, bundled inside Zapret Desktop. Original source revision: 2085861957070eeea07990a522b29f42e5230210. Original authorship remains with Flowseal.
-- Native .NET transports replace Python dependencies; no Python runtime or upstream EXE is redistributed. See docs/TELEGRAM_PROXY.md for scope and differences.
+- Native .NET transports replace Python dependencies; no Python runtime or upstream EXE is redistributed. See https://github.com/fecset/zapret-desktop/blob/main/docs/TELEGRAM_PROXY.md for scope and differences.
 - System.Security.Cryptography.ProtectedData 10.0.0 is a Microsoft .NET library under MIT; covered by licenses/DotNet-LICENSE.txt and licenses/Runtime-NOTICES.txt.
 
 ## Telegram logo
