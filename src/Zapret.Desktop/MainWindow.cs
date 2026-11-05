@@ -68,6 +68,7 @@ public sealed partial class MainWindow : Window
     private string? payloadSourceSelection;
     private readonly HashSet<string> expandedConnectionDetails = new(StringComparer.OrdinalIgnoreCase);
     private bool compact;
+    private bool homeCardsSideBySide = true;
     private string? pendingFocusId;
     private string? pendingFocusName;
     private NavigationMethod lastFocusMethod;
@@ -104,11 +105,12 @@ public sealed partial class MainWindow : Window
         Width = 1440;
         Height = 900;
         MinWidth = 890;
-        MinHeight = 620;
+        MinHeight = vm.TelegramProxy is null ? 620 : 740;
         WindowDecorations = WindowDecorations.None;
         FontFamily = EngineeringTheme.Font;
         FontSize = 13;
         BuildShell();
+        InitializeTelegramUi();
         GotFocus += (_, e) => lastFocusMethod = e.NavigationMethod;
         PropertyChanged += (_, change) =>
         {
@@ -120,8 +122,9 @@ public sealed partial class MainWindow : Window
         SizeChanged += (_, _) =>
         {
             var next = Bounds.Width < EngineeringTheme.CompactBreakpoint;
-            if (next == compact) return;
-            compact = next;
+            var nextCards = Bounds.Width >= 1100;
+            if (next == compact && nextCards == homeCardsSideBySide) return;
+            compact = next; homeCardsSideBySide = nextCards;
             var offset = contentScroll.Offset;
             BuildShell();
             Show(currentPage, offset);
@@ -166,6 +169,7 @@ public sealed partial class MainWindow : Window
         if (vm.Settings.CheckUpdates) await CheckForUpdatesAsync();
     }
 
+    internal bool ExitReady => exitAllowed;
     public async Task ExitAsync()
     {
         if (exitInProgress) return;
@@ -178,6 +182,7 @@ public sealed partial class MainWindow : Window
                 Activate();
                 return;
             }
+            if (vm.TelegramProxy is not null) await vm.TelegramProxy.ShutdownAsync();
             exitAllowed = true;
             CompleteExit();
         }
@@ -266,6 +271,7 @@ public sealed partial class MainWindow : Window
         AddNavigation(sideContent, "Главная", FluentIcons.Home);
         AddNavigation(sideContent, "Стратегии", FluentIcons.Apps);
         AddNavigation(sideContent, "Списки", FluentIcons.List);
+        AddNavigation(sideContent, "Telegram прокси", null, new TelegramMark(18));
         var systemLabel = SideLabel("СИСТЕМА");
         systemLabel.Margin = new Thickness(12, 20, 0, 12);
         sideContent.Children.Add(systemLabel);
@@ -273,7 +279,7 @@ public sealed partial class MainWindow : Window
         AddNavigation(sideContent, "Логи", FluentIcons.DocumentText);
         AddNavigation(sideContent, "Настройки", FluentIcons.Settings);
         side.Children.Add(sideContent);
-        var sideFoot = new StackPanel { Margin = new Thickness(24, 16, 24, 28), Spacing = 12 };
+        var sideFoot = new StackPanel { Name = "SidebarFooter", Margin = new Thickness(24, 16, 24, 28), Spacing = 12 };
         sideFoot.Children.Add(new Border { Height = 1, Background = OutlineBrush, Margin = new Thickness(0, 0, 0, 3) });
         var online = new Grid { ColumnDefinitions = new ColumnDefinitions("6,*"), ColumnSpacing = 8,
             VerticalAlignment = VerticalAlignment.Center };
@@ -287,12 +293,13 @@ public sealed partial class MainWindow : Window
         sidebarStatusPanel = new Border { Child = online, Padding = new Thickness(10, 4), Background = StatusBackground() };
         AutomationProperties.SetAutomationId(sidebarStatusPanel, "SidebarStatus");
         sideFoot.Children.Add(sidebarStatusPanel);
+        if (vm.TelegramProxy is not null) sideFoot.Children.Add(TelegramSidebarStatus());
         var versions = new StackPanel();
         versions.Children.Add(new TextBlock { Text = $"Desktop {vm.DesktopVersion}", Foreground = MutedBrush, FontSize = 12, LineHeight = 18 });
         sidebarUpstreamVersion = new TextBlock { Text = $"zapret {vm.UpstreamVersion}", Foreground = MutedBrush, FontSize = 12, LineHeight = 18 };
         versions.Children.Add(sidebarUpstreamVersion);
         sideFoot.Children.Add(versions);
-        sideFoot.Children.Add(new TextBlock { Text = "fecset · bol-van\nFlowseal", Foreground = Token("muted"), FontSize = 12,
+        sideFoot.Children.Add(new TextBlock { Name = "SidebarAuthors", Text = "fecset · bol-van\nFlowseal", Foreground = Token("muted"), FontSize = 12,
             LineHeight = 18, Margin = new Thickness(0, 6, 0, 0) });
         Grid.SetRow(sideFoot, 2);
         side.Children.Add(sideFoot);
@@ -361,10 +368,10 @@ public sealed partial class MainWindow : Window
         Text = label, Foreground = MutedBrush, FontSize = 12,
         Margin = new Thickness(12, 0, 0, 15)
     };
-    private void AddNavigation(StackPanel container, string name, Geometry icon)
+    private void AddNavigation(StackPanel container, string name, Geometry? icon, Control? iconControl = null)
     {
         var content = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 12 };
-        content.Children.Add(new PathIcon { Data = icon, Width = 18, Height = 18,
+        content.Children.Add(iconControl ?? new PathIcon { Data = icon, Width = 18, Height = 18,
             VerticalAlignment = VerticalAlignment.Center });
         content.Children.Add(new TextBlock { Text = name, FontSize = 13, VerticalAlignment = VerticalAlignment.Center });
         var button = new Button
@@ -402,6 +409,7 @@ public sealed partial class MainWindow : Window
         var offset = scrollOffset ?? (name == currentPage ? contentScroll.Offset : default);
         currentPage = name;
         DetachPage();
+        refreshTelegramPage = null; refreshTelegramHome = null;
         page.Children.Clear();
         engineControls.Clear();
         actionButtons.Clear();
@@ -413,6 +421,7 @@ public sealed partial class MainWindow : Window
             case "Главная": BuildHome(); break;
             case "Стратегии": BuildStrategies(); break;
             case "Списки": BuildLists(); break;
+            case "Telegram прокси": BuildTelegramProxy(); break;
             case "Диагностика": BuildDiagnostics(); break;
             case "Логи": BuildLogs(); break;
             case "Настройки": BuildSettings(); break;

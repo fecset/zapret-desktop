@@ -21,3 +21,16 @@
 В ZIP входят `LICENSE`, этот указатель и общая папка `licenses/`. `Runtime-NOTICES.txt` объединяет исходные тексты дополнительных уведомлений зависимостей; одинаковые тексты включены один раз. При обновлении зависимостей нужно обновлять и соответствующие уведомления.
 
 Исходники распространяемых нативных библиотек: [WinDivert 2.2.2](https://github.com/basil00/WinDivert/archive/refs/tags/v2.2.2.tar.gz), [Cygwin 3.4.10](https://github.com/mirror/newlib-cygwin/archive/refs/tags/cygwin-3.4.10.tar.gz). DLL остаются отдельными файлами и могут быть заменены совместимой сборкой. Условия Cygwin и исключение для связывания опубликованы на [официальной странице лицензирования](https://cygwin.com/licensing.html).
+
+## TG WS Proxy — Flowseal
+
+- Original author: Flowseal.
+- Source: https://github.com/Flowseal/tg-ws-proxy
+- License: MIT; complete original copyright and license: licenses/TG-WS-Proxy-LICENSE.txt.
+- C# port/adaptation of the networking functionality, bundled inside Zapret Desktop. Original source revision: 2085861957070eeea07990a522b29f42e5230210. Original authorship remains with Flowseal.
+- Native .NET transports replace Python dependencies; no Python runtime or upstream EXE is redistributed. See docs/TELEGRAM_PROXY.md for scope and differences.
+- System.Security.Cryptography.ProtectedData 10.0.0 is a Microsoft .NET library under MIT; covered by licenses/DotNet-LICENSE.txt and licenses/Runtime-NOTICES.txt.
+
+## Telegram logo
+
+The original Telegram vector logo is used for Telegram Proxy navigation and controls. Source and usage terms: https://telegram.org/tour/screenshots (official Telegram logos). TelegramMark.cs uses the original airplane silhouette with the application’s monochrome icon colors; this feature is not affiliated with Telegram.

@@ -9,6 +9,7 @@
     <EmbeddedResource Include="Scripts/TestStrategies.ps1" LogicalName="Zapret.Infrastructure.DesktopStrategyTest.ps1" />
     <InternalsVisibleTo Include="Zapret.Core.Tests" />
     <ProjectReference Include="../Zapret.Core/Zapret.Core.csproj" />
+    <PackageReference Include="System.Security.Cryptography.ProtectedData" Version="10.0.0" />
   </ItemGroup>
 
 </Project>

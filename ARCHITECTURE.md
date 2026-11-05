@@ -54,3 +54,15 @@ Hosts изменяется только после предпросмотра и
 `Zapret.Core.Tests` проверяет инфраструктуру и обработку данных; `Zapret.Desktop.Tests` — модели представлений, жизненный цикл и интерфейс через headless Avalonia. Тесты используют временные файлы и подмены Windows, HTTP и DNS.
 
 Откат при обработанном исключении не обеспечивает восстановление после отключения питания: общего журнала транзакций для обновлений и изменений нескольких файлов нет. Настоящие драйвер, служба, UAC и работа обхода DPI проверяются отдельно в Windows. Контрольный HTTP-ответ не подтверждает воспроизведение видео или голосовую связь.
+
+## Нативный Telegram прокси
+
+- Core: ITelegramProxy, immutable snapshot/state и TelegramProxyOptions, контракт защищённого хранилища. Опции находятся в Core, чтобы Infrastructure не зависел от сетевого проекта.
+- Zapret.TelegramProxy (net10.0): отдельная библиотека без Avalonia и сторонних пакетов, TCP listener только IPv4 loopback, MTProto/AES-CTR, TLS/WebSocket, HTTP/2, Worker/CfProxy/TCP routing. Runtime API .NET 10 выполняют TLS и WebSocket framing. Потоки, DNS, TLS и сокеты обслуживаются асинхронно; жизненный цикл сериализован SemaphoreSlim. Состояние защищено lock, счётчики — Interlocked; старые сеансы отменяются и ожидаются перед повторным bind.
+- Infrastructure: TelegramProxySettingsStore с атомарной записью, DPAPI CurrentUser (System.Security.Cryptography.ProtectedData 10.0.0), ограничением JSON и отказом от молчаливого сброса. Экспорт пользовательских данных не включает отдельный файл telegram-proxy.json.
+- Desktop: TelegramProxyViewModel зарегистрирован singleton в существующем DI; MainWindow partial TelegramProxyView повторно использует EngineeringTheme, Panel, Button, Input и навигацию. TelegramProxyTrayMenu использует единственную существующую иконку Desktop. Отдельный gate не зависит от Busy/operationGate Zapret. Статистика обновляется в UI раз в секунду только при запущенном сервере; настройки не пересоздаются на каждом обновлении.
+- Tests: Zapret.TelegramProxy.Tests (xunit.v3, локальные Kestrel TLS/WS/H2 и тестовые TCP-клиенты), TelegramProxyTests в Desktop.Tests.
+
+Сетевое ядро не вызывает SCM, WinDivert, Process.Start, Python или внешние EXE. Запуск tg://proxy осуществляется только UI по действию пользователя. Полный выход и обновление Desktop останавливают встроенный сервер; скрытие окна — нет.
+
+Карта переноса: proxy/tg_ws_proxy.py → MtProto/ObfuscatedTransport.cs и TelegramProxyServer.cs; proxy/bridge.py → MtProto/PacketFraming.cs и двунаправленный relay; proxy/utils.py/config.py/balancer.py → Routing/DcRoutes.cs и UpstreamConnector.cs; raw_websocket.py → штатный ClientWebSocket; cf_h2.py/h2_transport.py → Transport/Http2Upstream.cs. Исходный коммит: 2085861957070eeea07990a522b29f42e5230210. Подробные отличия от Python-версии и пользовательская инструкция: docs/TELEGRAM_PROXY.md.

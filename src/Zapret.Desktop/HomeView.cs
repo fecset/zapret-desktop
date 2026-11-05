@@ -173,7 +173,7 @@ public sealed partial class MainWindow
         grid.Children.Add(separator);
     }
 
-    private Border StatusPill(string label, IBrush color)
+    private Border StatusPill(string label, IBrush color, IBrush? background = null)
     {
         var line = new Grid { ColumnDefinitions = new ColumnDefinitions("6,*"), ColumnSpacing = 8,
             VerticalAlignment = VerticalAlignment.Center };
@@ -184,7 +184,7 @@ public sealed partial class MainWindow
         text.VerticalAlignment = VerticalAlignment.Center;
         Grid.SetColumn(text, 1);
         line.Children.Add(text);
-        return new Border { Child = line, Background = StatusBackground(), Padding = new Thickness(10, 4),
+        return new Border { Child = line, Background = background ?? StatusBackground(), Padding = new Thickness(10, 4),
             MinWidth = 220, Height = 26, HorizontalAlignment = HorizontalAlignment.Left };
     }
 

@@ -360,7 +360,7 @@ public sealed partial class MainWindow
             "Обновить и перезапустить Desktop", "Установить и перезапустить Desktop",
             async () =>
             {
-                if (await vm.UpdateDesktopAsync()) { CompleteExit(); return; }
+                if (await vm.UpdateDesktopAsync()) { if (vm.TelegramProxy is not null) await vm.TelegramProxy.ShutdownAsync(); CompleteExit(); return; }
                 if (currentPage == "Настройки") Show("Настройки");
             },
             out desktopUpdateStatus, out desktopUpdateButton, out desktopReleaseNotesButton, activityKey: "update:desktop"));
@@ -427,6 +427,8 @@ public sealed partial class MainWindow
         stack.Children.Add(Text("Авторы исходных проектов", 17, FontWeight.SemiBold));
         stack.Children.Add(Text("bol-van — автор zapret: github.com/bol-van/zapret", 14));
         stack.Children.Add(Text("Flowseal — автор Windows-сборки zapret-discord-youtube: github.com/Flowseal/zapret-discord-youtube", 14));
+        stack.Children.Add(Text("Flowseal — автор оригинального TG WS Proxy (адаптация на C#)", 14));
+        stack.Children.Add(Button("github.com/Flowseal/tg-ws-proxy", () => { openReleasePage(new Uri("https://github.com/Flowseal/tg-ws-proxy")); return Task.CompletedTask; }));
         stack.Children.Add(Text("fecset — автор Zapret Desktop: github.com/fecset/zapret-desktop", 14));
         page.Children.Add(Panel(stack));
     }

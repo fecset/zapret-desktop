@@ -13,8 +13,11 @@ public sealed partial class MainViewModel(IZapretDistribution distribution, IStr
     IPrivilegeService privilege,
     ILogger<MainViewModel> logger, IUserDataBackupService? backups = null,
     IPayloadRecoveryService? payloadRecovery = null, IManagedUpdateService? managedUpdates = null,
-    IConnectionHealthService? connection = null, IStrategyHistoryService? history = null) : ObservableObject
+    IConnectionHealthService? connection = null, IStrategyHistoryService? history = null,
+    TelegramProxyViewModel? telegramProxy = null) : ObservableObject
 {
+    public TelegramProxyViewModel? TelegramProxy { get; } = telegramProxy;
+    private bool telegramEventsConnected;
     private DesktopSettings settings = new();
     private bool settingsSavePending;
     private ZapretStrategy? selectedStrategy;
@@ -108,6 +111,16 @@ public sealed partial class MainViewModel(IZapretDistribution distribution, IStr
     public async Task InitializeAsync()
     {
         process.OutputReceived += (level, line) => Avalonia.Threading.Dispatcher.UIThread.Post(() => Log(level, line));
+        if (TelegramProxy is not null)
+        {
+            if (!telegramEventsConnected)
+            {
+                TelegramProxy.LogReceived += (level, line) => Log(level, line);
+                TelegramProxy.FeedbackReceived += (text, failed) => Message = failed ? "Ошибка: " + text : text;
+                telegramEventsConnected = true;
+            }
+            await TelegramProxy.InitializeAsync();
+        }
         settings = await settingsStore.LoadAsync();
         if (settingsStore is ISettingsHealth { LastWarning: { } warning })
         {

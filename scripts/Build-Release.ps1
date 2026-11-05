@@ -63,7 +63,7 @@ try {
     foreach ($trackedPath in $trackedFiles) {
         $relative = $trackedPath.Substring('zapret/'.Length).Replace('\', '/')
         $runtime = $relative -match '^(?:service\.bat|general[^/]*\.bat)$' -or
-            $relative -match '^bin/[^/]+\.(?:exe|dll|sys|bin)$' -or
+            ($relative -eq 'bin/winws.exe' -or $relative -match '^bin/[^/]+\.(?:dll|sys|bin)$') -or
             $relative -match '^lists/(?:list-general|list-google|list-exclude|ipset-all|ipset-exclude)(?:-user)?\.txt$' -or
             $relative -in @('utils/test zapret.ps1', 'utils/targets.txt', '.service/version.txt')
         if (-not $runtime -or $relative -eq 'bin/TgWsProxy_windows.exe') { continue }
@@ -91,7 +91,7 @@ try {
         Copy-Item -LiteralPath $license.FullName -Destination (Join-Path $publishRoot 'licenses') -Force
     }
     foreach ($required in @('Zapret.Desktop.exe', 'LICENSE', 'THIRD_PARTY_NOTICES.md', 'README.md',
-        'licenses/Zapret-LICENSE.txt', 'licenses/WinDivert-LICENSE.txt', 'licenses/Avalonia-LICENSE.md',
+        'licenses/Zapret-LICENSE.txt', 'licenses/TG-WS-Proxy-LICENSE.txt', 'licenses/WinDivert-LICENSE.txt', 'licenses/Avalonia-LICENSE.md',
         'licenses/DotNet-LICENSE.txt', 'licenses/Runtime-NOTICES.txt', 'licenses/Inter-OFL.txt', 'licenses/JetBrainsMono-OFL.txt', 'licenses/FluentIcons-LICENSE.txt',
         'licenses/Cygwin-NEWLIB-NOTICES.txt', 'licenses/Winws-NOTICES.txt',
         'licenses/Cygwin-LICENSE.txt', 'licenses/LGPL-3.0.txt', 'licenses/GPL-3.0.txt',
@@ -104,7 +104,8 @@ try {
     }
     if (@(Get-ChildItem -LiteralPath $distributionTarget -Filter 'general*.bat' -File).Count -eq 0) { throw 'No zapret strategies were packaged.' }
     foreach ($unwanted in Get-ChildItem -LiteralPath $publishRoot -File -Recurse -Force) {
-        if ($unwanted.Extension -eq '.pdb' -or $unwanted.Name -like '*.enabled' -or $unwanted.Name -like '*.backup' -or
+        if ($unwanted.Name -like 'TgWsProxy*' -or $unwanted.Name -like 'python*' -or $unwanted.Extension -in @('.py', '.pyc', '.pyo') -or
+            $unwanted.Name -eq 'telegram-proxy.json' -or $unwanted.Extension -eq '.pdb' -or $unwanted.Name -like '*.enabled' -or $unwanted.Name -like '*.backup' -or
             $unwanted.Name -like '*.test-backup.txt' -or $unwanted.Name -like '*.tmp' -or $unwanted.Name -like '*.log' -or
             $unwanted.Name -eq 'settings.json' -or $unwanted.Name -eq 'history.json') {
             throw "Runtime or debug data entered the release: $($unwanted.FullName)"

@@ -50,11 +50,16 @@ public sealed class App : Application
             services.AddSingleton<IStrategyTester, PowerShellStrategyTester>();
             services.AddSingleton<ISettingsStore>(new JsonSettingsStore(Path.Combine(
                 Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "ZapretDesktop", "settings.json")));
+            services.AddSingleton<ITelegramProxy, Zapret.TelegramProxy.TelegramProxyServer>();
+            services.AddSingleton<ITelegramProxySettingsStore>(new TelegramProxySettingsStore(Path.Combine(
+                Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "ZapretDesktop", "telegram-proxy.json")));
+            services.AddSingleton<TelegramProxyViewModel>();
             services.AddSingleton<MainViewModel>();
             var provider = services.BuildServiceProvider();
             var vm = provider.GetRequiredService<MainViewModel>();
             var window = new MainWindow(vm);
             desktop.ShutdownMode = ShutdownMode.OnExplicitShutdown;
+            desktop.ShutdownRequested += (_, e) => { if (!window.ExitReady) { e.Cancel = true; _ = window.ExitAsync(); } };
             ConfigureTray(desktop, window, vm);
             // Leave MainWindow unset until the lifetime's automatic Show has passed.
             // Hidden autostart still initializes the engine, status timer and tray.
@@ -111,11 +116,18 @@ public sealed class App : Application
         var exit = new NativeMenuItem { Header = "Выход из приложения" };
         exit.Click += async (_, _) => await window.ExitAsync();
         menu.Items.Add(exit);
+        TelegramProxyTrayMenu? proxyMenu = null;
+        if (vm.TelegramProxy is { } proxy)
+        {
+            proxyMenu = new TelegramProxyTrayMenu(proxy, window.OpenTelegramProxy, uri => System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(uri.AbsoluteUri) { UseShellExecute = true }));
+            menu.Items.Insert(menu.Items.Count - 1, new NativeMenuItem { Header = "Telegram прокси", Menu = proxyMenu.Menu });
+        }
         tray.Menu = menu;
         tray.Clicked += (_, _) => { window.Show(); window.Activate(); };
         TrayIcon.SetIcons(this, new TrayIcons { tray });
         desktop.Exit += (_, _) =>
         {
+            proxyMenu?.Dispose();
             tray.IsVisible = false;
             tray.Dispose();
         };

@@ -13,14 +13,27 @@ public sealed partial class MainWindow
 {
     private void ConnectionPanel()
     {
+        if (vm.TelegramProxy is null) { page.Children.Add(BuildConnectionPanel(false)); return; }
+        var sideBySide = homeCardsSideBySide;
+        var cards = new Grid { ColumnDefinitions = new ColumnDefinitions(sideBySide ? "*,360" : "*"),
+            RowDefinitions = new RowDefinitions(sideBySide ? "*" : "Auto,Auto"), ColumnSpacing = 20, RowSpacing = 20 };
+        AutomationProperties.SetAutomationId(cards, "HomeNetworkCards");
+        cards.Children.Add(BuildConnectionPanel(true));
+        var telegram = TelegramHome();
+        if (sideBySide) Grid.SetColumn(telegram, 1); else Grid.SetRow(telegram, 1);
+        cards.Children.Add(telegram); page.Children.Add(cards);
+    }
+
+    private Border BuildConnectionPanel(bool narrow)
+    {
         var stack = new StackPanel();
-        var heading = new Grid { ColumnDefinitions = new ColumnDefinitions("*,Auto") };
+        var heading = new Grid { ColumnDefinitions = new ColumnDefinitions("*,Auto"), ColumnSpacing = narrow ? 12 : 0 };
         var title = Text("Доступность сервисов", 16, FontWeight.Medium);
         title.VerticalAlignment = VerticalAlignment.Center;
         heading.Children.Add(title);
         var check = EngineButton("Проверить соединение", vm.CheckConnectionAsync,
             isLoading: () => vm.CheckingConnection);
-        check.Width = ActionWidth;
+        check.Width = narrow ? double.NaN : ActionWidth;
         AutomationProperties.SetAutomationId(check, "CheckConnection");
         AutomationProperties.SetHelpText(check, "Повторная проверка контрольных HTTPS-адресов");
         Grid.SetColumn(check, 1);
@@ -43,8 +56,8 @@ public sealed partial class MainWindow
             var checkedResult = target is not null && !vm.CheckingConnection && vm.ConnectionError is null;
             var color = vm.CheckingConnection ? AccentTextBrush : vm.ConnectionError is not null ? BadBrush :
                 checkedResult ? target!.Passed ? GoodBrush : BadBrush : MutedBrush;
-            var row = new Grid { ColumnDefinitions = new ColumnDefinitions(Compact ? "130,250,100,*,40" : "160,288,108,*,40"),
-                MinHeight = Compact ? 36 : 44 };
+            var row = new Grid { ColumnDefinitions = new ColumnDefinitions(narrow ? "*,1.5*,65,0,32" : Compact ? "130,250,100,*,40" : "160,288,108,*,40"),
+                MinHeight = narrow || Compact ? 36 : 44 };
             row.Children.Add(CenteredText(name, 14, FontWeight.Medium));
             var result = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 6, VerticalAlignment = VerticalAlignment.Center };
             result.Children.Add(new Border { Width = 6, Height = 6, CornerRadius = new CornerRadius(3), Background = color,
@@ -69,7 +82,7 @@ public sealed partial class MainWindow
                 Stroke = MutedBrush, StrokeThickness = 1.5, StrokeLineCap = PenLineCap.Round,
                 Width = 10, Height = 6, HorizontalAlignment = HorizontalAlignment.Center, VerticalAlignment = VerticalAlignment.Center };
             var disclosure = new Button { Content = chevron,
-                Width = 40, Height = Compact ? 36 : 44, Background = Brushes.Transparent, Foreground = MutedBrush,
+                Width = narrow ? 32 : 40, Height = Compact ? 36 : 44, Background = Brushes.Transparent, Foreground = MutedBrush,
                 BorderThickness = new Thickness(0), Padding = new Thickness(0),
                 HorizontalContentAlignment = HorizontalAlignment.Center, VerticalContentAlignment = VerticalAlignment.Center };
             StyleAction(disclosure);
@@ -92,10 +105,10 @@ public sealed partial class MainWindow
             stack.Children.Add(row);
             stack.Children.Add(details);
         }
-        var scope = Text("HTTPS-проверка не подтверждает воспроизведение видео YouTube и голосовую связь Discord.", 12, color: MutedBrush);
+        var scope = Text(narrow ? "Проверяется доступ к сайтам, без видео и звонков." : "HTTPS-проверка не подтверждает воспроизведение видео YouTube и голосовую связь Discord.", 12, color: MutedBrush);
         scope.Margin = new Thickness(0, Compact ? 0 : 10, 0, 0);
         stack.Children.Add(scope);
-        page.Children.Add(DashboardSection(stack, "ServiceAvailability", new Thickness(EngineeringTheme.SectionPadding)));
+        return DashboardSection(stack, "ServiceAvailability", new Thickness(EngineeringTheme.SectionPadding));
     }
 
     private TextBlock CenteredText(string text, double size, FontWeight? weight = null, IBrush? color = null)

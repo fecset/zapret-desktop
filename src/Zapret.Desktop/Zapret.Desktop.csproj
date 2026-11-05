@@ -3,7 +3,7 @@
   <PropertyGroup>
     <OutputType>WinExe</OutputType>
     <TargetFramework>net10.0-windows</TargetFramework>
-    <Version>0.3.0</Version>
+    <Version>0.4.0</Version>
     <RuntimeIdentifier>win-x64</RuntimeIdentifier>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
@@ -22,9 +22,10 @@
     <None Include="../../zapret/LICENSE.txt" Link="licenses/Zapret-LICENSE.txt" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
     <None Include="../../licenses/**" Link="licenses/%(RecursiveDir)%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
     <None Include="../../zapret/**"
-          Exclude="../../zapret/TgWsProxy_windows.exe;../../zapret/LICENSE.txt;../../zapret/lists/*.backup;../../zapret/lists/*.test-backup.txt;../../zapret/utils/*.enabled"
+          Exclude="../../zapret/**/TgWsProxy*.exe;../../zapret/**/*.py;../../zapret/**/*.pyc;../../zapret/**/python*.exe;../../zapret/LICENSE.txt;../../zapret/lists/*.backup;../../zapret/lists/*.test-backup.txt;../../zapret/utils/*.enabled"
           Link="zapret/%(RecursiveDir)%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" ExcludeFromSingleFile="true" />
     <ProjectReference Include="../Zapret.Core/Zapret.Core.csproj" />
+    <ProjectReference Include="../Zapret.TelegramProxy/Zapret.TelegramProxy.csproj" />
     <ProjectReference Include="../Zapret.Infrastructure/Zapret.Infrastructure.csproj" />
     <PackageReference Include="Avalonia" Version="12.1.3" />
     <PackageReference Include="Avalonia.Desktop" Version="12.1.3" />

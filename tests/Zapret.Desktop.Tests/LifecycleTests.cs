@@ -212,7 +212,7 @@ internal sealed class TestApplication : IDisposable
     public TestApplication(IDiagnosticService? diagnostics = null, IConnectionHealthService? connection = null,
         bool featureServices = false, IPayloadRecoveryService? payloadRecovery = null, HttpClient? updateClient = null,
         IUpdateService? updateService = null, IStrategyTester? strategyTester = null, IManagedUpdateService? managedUpdates = null,
-        IZapretProcessManager? processManager = null, IServiceManager? serviceManager = null)
+        IZapretProcessManager? processManager = null, IServiceManager? serviceManager = null, TelegramProxyViewModel? telegramProxy = null)
     {
         Distribution = new(Path.Combine(workspace, "zapret"));
         Directory.CreateDirectory(Distribution.ListsDirectory);
@@ -232,7 +232,7 @@ internal sealed class TestApplication : IDisposable
             managedUpdates: managedUpdates ?? (updateClient is null ? null : new ManagedUpdateService(Distribution, updateClient,
                 Path.Combine(workspace, "application"), Path.Combine(workspace, "stage"), HostsPath)),
             connection: connection,
-            history: featureServices ? new StrategyHistoryService(Distribution, Path.Combine(workspace, "data")) : null);
+            history: featureServices ? new StrategyHistoryService(Distribution, Path.Combine(workspace, "data")) : null, telegramProxy: telegramProxy);
         var initialFile = Path.Combine(Distribution.Root, "general.bat");
         ViewModel.SelectedStrategy = new("general", "general", "General", initialFile,
             BatStrategyParser.Parse(File.ReadAllText(initialFile), Distribution.Root, initialFile,

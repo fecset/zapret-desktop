@@ -59,7 +59,7 @@ public sealed class ReleasePackagingTests
 
             Assert.NotEqual(0, result.ExitCode);
             Assert.False(File.Exists(dotnetMarker), result.Output);
-            Assert.Contains("Tracked zapret files differ from HEAD", result.Output);
+            Assert.True(result.Output.Contains("Tracked zapret files differ from HEAD", StringComparison.Ordinal), result.Output);
             Assert.False(Directory.Exists(outputDirectory), result.Output);
             Assert.Empty(Directory.EnumerateFileSystemEntries(temporaryDirectory));
             Assert.Equal(changed, await File.ReadAllBytesAsync(input));
