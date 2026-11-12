@@ -1,9 +1,15 @@
-# ![Значок Zapret Desktop](src/Zapret.Desktop/Assets/app-32.png) Zapret Desktop
+<p align="center">
+  <img src="src/Zapret.Desktop/Assets/app.png" alt="Логотип Zapret Desktop" width="96" height="96">
+</p>
 
-![.NET 10](https://img.shields.io/badge/.NET-10-512BD4?style=flat&logo=dotnet)
-![Avalonia 12.1.3](https://img.shields.io/badge/Avalonia-12.1.3-A33D84?style=flat)
-![Windows 10/11 x64](https://img.shields.io/static/v1?label=Windows&message=10%2F11%20x64&color=0078D4&style=flat)
-[![Последний релиз](https://img.shields.io/github/v/release/fecset/zapret-desktop?style=flat&label=Release&logo=github&color=2E7D32)](https://github.com/fecset/zapret-desktop/releases/latest)
+<h1 align="center">Zapret Desktop</h1>
+
+<p align="center">
+  <img src="https://img.shields.io/badge/.NET-10-512BD4?style=flat&amp;logo=dotnet" alt=".NET 10">
+  <img src="https://img.shields.io/badge/Avalonia-12.1.3-A33D84?style=flat" alt="Avalonia 12.1.3">
+  <img src="https://img.shields.io/static/v1?label=Windows&amp;message=10%2F11%20x64&amp;color=0078D4&amp;style=flat" alt="Windows 10/11 x64">
+  <a href="https://github.com/fecset/zapret-desktop/releases/latest"><img src="https://img.shields.io/github/v/release/fecset/zapret-desktop?style=flat&amp;label=Release&amp;logo=github&amp;color=2E7D32" alt="Последний релиз"></a>
+</p>
 
 **Приложение для управления Zapret на Windows:** запуск, выбор и проверка стратегий, редактирование списков, встроенный Telegram-прокси и обновления.
 
