@@ -11,7 +11,8 @@ namespace Zapret.Infrastructure;
 internal static class DesktopUpdateHelper
 {
     internal static async Task<DesktopUpdateSchedule> ScheduleAsync(ManagedUpdatePlan plan,
-        IReadOnlyDictionary<string, string> hashes, string applicationDirectory, int currentProcessId, CancellationToken ct)
+        IReadOnlyDictionary<string, string> hashes, string applicationDirectory, string workspace,
+        int currentProcessId, CancellationToken ct)
     {
         if (!OperatingSystem.IsWindows()) throw new PlatformNotSupportedException("Desktop updates require Windows.");
         // Elevated code and its manifest must never be loaded from a user-writable directory.
@@ -19,6 +20,10 @@ internal static class DesktopUpdateHelper
         var jobRoot = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles),
             "ZapretDesktop-update-" + Guid.NewGuid().ToString("N"));
         UpdateFiles.RequireDistinctTrees(applicationDirectory, jobRoot);
+        UpdateFiles.RequireDistinctTrees(applicationDirectory, workspace);
+        UpdateFiles.RequireDistinctTrees(workspace, jobRoot);
+        if (!Path.GetFullPath(plan.PreparedDirectory).Equals(Path.GetFullPath(workspace), StringComparison.OrdinalIgnoreCase))
+            UpdateFiles.RequireChild(workspace, plan.PreparedDirectory);
         UpdateFiles.RequireNoLinks(jobRoot);
         new DirectoryInfo(jobRoot).Create(JobSecurity());
         var helper = Path.Combine(jobRoot, "apply-update.ps1");
@@ -32,7 +37,7 @@ internal static class DesktopUpdateHelper
         var job = new
         {
             ProcessId = currentProcessId, ProcessStartTicks = process.StartTime.ToUniversalTime().Ticks.ToString(System.Globalization.CultureInfo.InvariantCulture),
-            Source = plan.PreparedDirectory, Target = applicationDirectory, Replacement = replacement, Backup = backup,
+            Source = plan.PreparedDirectory, Workspace = workspace, Target = applicationDirectory, Replacement = replacement, Backup = backup,
             Log = log, Ready = ready, Hashes = hashes, Relaunch = true, RefreshIcons = true, Version = plan.Version
         };
         await File.WriteAllTextAsync(manifest, JsonSerializer.Serialize(job), new UTF8Encoding(false), ct);
@@ -43,7 +48,9 @@ internal static class DesktopUpdateHelper
         var start = new ProcessStartInfo(Path.Combine(windows, "System32", "WindowsPowerShell", "v1.0", "powershell.exe"))
         {
             UseShellExecute = false, CreateNoWindow = true, WindowStyle = ProcessWindowStyle.Hidden,
-            WorkingDirectory = jobRoot
+            // A process holds its native working directory open until it exits.
+            // Keep that handle outside the job so the script can remove its own directory.
+            WorkingDirectory = Path.GetDirectoryName(jobRoot)!
         };
         foreach (var argument in new[] { "-NoLogo", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", helper, "-ManifestPath", manifest })
             start.ArgumentList.Add(argument);
@@ -61,7 +68,7 @@ internal static class DesktopUpdateHelper
             await Task.Delay(100, CancellationToken.None);
         }
         return new(helper, log, backup,
-            $"Подготовлено обновление Desktop {plan.Version}. Приложение закроется, установит обновление и запустится снова. Результат: {log}");
+            $"Подготовлено обновление Desktop {plan.Version}. Приложение закроется, установит обновление и запустится снова. Журнал при ошибке: {log}");
     }
 
     internal static DirectorySecurity JobSecurity()
@@ -147,6 +154,19 @@ internal static class DesktopUpdateHelper
             if (-not $full.StartsWith($prefix, [StringComparison]::OrdinalIgnoreCase)) { throw 'Path outside update directory' }
             return $full.Substring($prefix.Length)
         }
+        function Assert-DistinctTrees([string]$first, [string]$second) {
+            $left = [IO.Path]::GetFullPath($first).TrimEnd('\') + '\'
+            $right = [IO.Path]::GetFullPath($second).TrimEnd('\') + '\'
+            if ($left.StartsWith($right, [StringComparison]::OrdinalIgnoreCase) -or
+                $right.StartsWith($left, [StringComparison]::OrdinalIgnoreCase)) {
+                throw 'Overlapping update cleanup directories'
+            }
+        }
+        function Remove-TemporaryTree([string]$path) {
+            Assert-NoLinks $path
+            @(Get-SafeFiles $path) | Out-Null
+            Remove-Item -LiteralPath $path -Recurse -Force
+        }
         function Assert-Manifest([string]$root) {
             $files = @(Get-SafeFiles $root)
             if ($files.Count -ne @($job.Hashes.PSObject.Properties).Count) { throw 'Update file count changed' }
@@ -198,10 +218,24 @@ internal static class DesktopUpdateHelper
             }
         }
         try {
-            foreach ($path in @($job.Source, $job.Target, $job.Replacement, $job.Backup, $job.Log, $job.Ready)) { Assert-NoLinks $path }
+            $jobRoot = [IO.Path]::GetFullPath($PSScriptRoot).TrimEnd('\')
+            $workspaceFull = [IO.Path]::GetFullPath($job.Workspace).TrimEnd('\')
+            foreach ($path in @($job.Source, $job.Target, $job.Replacement, $job.Backup, $job.Log, $job.Ready, $jobRoot, $workspaceFull)) { Assert-NoLinks $path }
             $targetFull = [IO.Path]::GetFullPath($job.Target).TrimEnd('\')
             $sourceFull = [IO.Path]::GetFullPath($job.Source).TrimEnd('\')
             $backupFull = [IO.Path]::GetFullPath($job.Backup).TrimEnd('\')
+            if ([IO.Path]::GetFileName($jobRoot) -notmatch '^ZapretDesktop-update-[0-9a-fA-F]{32}$' -or
+                [IO.Path]::GetFullPath($ManifestPath) -ne (Join-Path $jobRoot 'update.json') -or
+                [IO.Path]::GetFullPath($job.Log) -ne (Join-Path $jobRoot 'result.log') -or
+                [IO.Path]::GetFullPath($job.Ready) -ne (Join-Path $jobRoot 'ready')) {
+                throw 'Unexpected Desktop helper directory'
+            }
+            if ([IO.Path]::GetFileName($workspaceFull) -notmatch '^[0-9a-fA-F]{32}$' -or
+                ($sourceFull -ne $workspaceFull -and -not $sourceFull.StartsWith($workspaceFull + '\', [StringComparison]::OrdinalIgnoreCase))) {
+                throw 'Unexpected Desktop staging directory'
+            }
+            foreach ($tree in @($job.Target, $job.Replacement, $job.Backup, $workspaceFull)) { Assert-DistinctTrees $jobRoot $tree }
+            foreach ($tree in @($job.Target, $job.Replacement, $job.Backup)) { Assert-DistinctTrees $workspaceFull $tree }
             $backupPrefix = $targetFull + '.backup-'
             if (-not $backupFull.StartsWith($backupPrefix, [StringComparison]::OrdinalIgnoreCase) -or
                 $backupFull.Substring($backupPrefix.Length) -notmatch '^[0-9a-fA-F]{32}$') {
@@ -253,16 +287,18 @@ internal static class DesktopUpdateHelper
             Write-Outcome $true 'Приложение обновлено. Установленный zapret и пользовательские данные сохранены.'
             # The install is committed. Cleanup errors must not roll back a working
             # version, and a successful update must not retain the old app folder.
+            $backupCleanupFailed = $false
             try {
                 Assert-NoLinks $backupFull
                 @(Get-SafeFiles $backupFull) | Out-Null
                 Remove-Item -LiteralPath $backupFull -Recurse -Force
             }
             catch {
+                $backupCleanupFailed = $true
                 $cleanupFailure = $_.Exception.Message
                 try {
                     [IO.File]::AppendAllText($job.Log, [Environment]::NewLine + "Cannot remove temporary rollback directory: $backupFull. $cleanupFailure")
-                    Write-Outcome $true 'Приложение обновлено, но временную папку предыдущей версии не удалось удалить.'
+                    Write-Outcome $true ("Приложение обновлено, но временную папку предыдущей версии не удалось удалить: $backupFull. $cleanupFailure")
                 }
                 catch { Write-Warning "Cannot record cleanup failure: $($_.Exception.Message)" }
             }
@@ -271,12 +307,27 @@ internal static class DesktopUpdateHelper
                 try { Refresh-DesktopIcon (Join-Path $job.Target 'Zapret.Desktop.exe') }
                 catch { Write-Warning "Cannot refresh Desktop icon: $($_.Exception.Message)" }
             }
+            # The script is already parsed, and the native working directory is outside
+            # the job. Remove only this update's validated workspace and helper directory.
+            # Failed installs keep these files and their log for diagnosis/retry.
+            try {
+                Remove-TemporaryTree $workspaceFull
+                if (-not $backupCleanupFailed) { Remove-TemporaryTree $jobRoot }
+            }
+            catch {
+                $cleanupFailure = $_.Exception.Message
+                try {
+                    Write-Outcome $true ("Приложение обновлено, но временные файлы обновления не удалось удалить: " + $cleanupFailure)
+                    [IO.File]::AppendAllText($job.Log, "`r`nCannot remove temporary update files: $cleanupFailure")
+                }
+                catch { Write-Warning "Cannot record cleanup failure: $($_.Exception.Message)" }
+            }
             try { Start-Desktop }
             catch {
                 $relaunchFailure = $_.Exception.Message
                 try {
-                    [IO.File]::AppendAllText($job.Log, "`r`nRelaunch failed: $relaunchFailure")
-                    Write-Outcome $true 'Обновление установлено, но автоматический запуск приложения не удался.'
+                    Write-Outcome $true ("Обновление установлено, но автоматический запуск приложения не удался: " + $relaunchFailure)
+                    Write-Warning "Relaunch failed: $relaunchFailure"
                 }
                 catch { Write-Warning "Cannot record relaunch failure: $($_.Exception.Message)" }
             }

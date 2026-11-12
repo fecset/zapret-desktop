@@ -57,6 +57,46 @@ public sealed class ManagedUpdateTests : IDisposable
         Assert.Equal("8.8.8.8/32\n", File.ReadAllText(Path.Combine(DistributionRoot, "lists", "ipset-all.txt")));
     }
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task DistributionUpdateRemovesOnlyItsWorkspaceAndKeepsRollback(bool nestedPackage)
+    {
+        var files = DistributionFiles();
+        if (nestedPackage) files = files.Select(x => ("release/" + x.Item1, x.Item2));
+        using var client = Client(Zip(files));
+        var service = Service(client);
+        var plan = await service.PrepareDistributionAsync();
+        var workspace = Path.Combine(root, "stage", plan.Id);
+        var otherPlan = await service.PrepareDistributionAsync();
+
+        var result = await service.ApplyDistributionAsync(plan);
+
+        Assert.False(Directory.Exists(workspace));
+        Assert.True(Directory.Exists(otherPlan.PreparedDirectory));
+        Assert.True(Directory.Exists(result.BackupDirectory));
+        await service.RollbackDistributionAsync(result);
+        Assert.False(File.Exists(Path.Combine(DistributionRoot, "service.bat")));
+    }
+
+    [Fact]
+    public async Task DistributionCleanupFailureReportsWarningWithoutUndoingUpdateOrRollback()
+    {
+        using var client = Client(Zip(DistributionFiles()));
+        var service = Service(client);
+        var plan = await service.PrepareDistributionAsync();
+        using var locked = new FileStream(Path.Combine(plan.PreparedDirectory, "service.bat"), FileMode.Open,
+            FileAccess.Read, FileShare.Read);
+
+        var result = await service.ApplyDistributionAsync(plan);
+
+        Assert.Contains("Не удалось удалить временные файлы", result.Summary);
+        Assert.True(File.Exists(Path.Combine(DistributionRoot, "service.bat")));
+        Assert.True(Directory.Exists(result.BackupDirectory));
+        await service.RollbackDistributionAsync(result);
+        Assert.False(File.Exists(Path.Combine(DistributionRoot, "service.bat")));
+    }
+
     [Fact]
     public async Task PrepareReportsDownloadExtractionAndCompletionProgress()
     {
@@ -428,6 +468,10 @@ public sealed class ManagedUpdateTests : IDisposable
     [InlineData("changed-after-ready", "1.20.0", "1.10.0")]
     [InlineData("success-log-failure", "1.20.0", "1.10.0")]
     [InlineData("unsafe-backup", "1.20.0", "1.10.0")]
+    [InlineData("unsafe-workspace", "1.20.0", "1.10.0")]
+    [InlineData("cleanup-failure", "1.20.0", "1.10.0")]
+    [InlineData("backup-cleanup-failure", "1.20.0", "1.10.0")]
+    [InlineData("success-flat-package", "1.20.0", "1.10.0")]
     public async Task DesktopHelperWaitsForOwnerExitThenSwapsOnlyTemporaryFixtureAndPreservesUserData(
         string scenario, string installedVersion, string bundledVersion)
     {
@@ -436,7 +480,15 @@ public sealed class ManagedUpdateTests : IDisposable
         var failAfterExit = scenario == "changed-after-ready";
         var failSuccessLog = scenario == "success-log-failure";
         var unsafeBackup = scenario == "unsafe-backup";
-        var source = Path.Combine(root, "helper-source");
+        var unsafeWorkspace = scenario == "unsafe-workspace";
+        var cleanupFailure = scenario == "cleanup-failure";
+        var backupCleanupFailure = scenario == "backup-cleanup-failure";
+        var workspace = Path.Combine(root, "stage", Guid.NewGuid().ToString("N"));
+        var source = scenario == "success-flat-package" ? workspace : Path.Combine(workspace, "release");
+        var unrelated = Path.Combine(root, "stage", Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(unrelated);
+        var unrelatedFile = Path.Combine(unrelated, "keep.txt");
+        File.WriteAllText(unrelatedFile, "other update");
         var target = Path.Combine(root, "helper-target");
         Directory.CreateDirectory(source);
         Directory.CreateDirectory(target);
@@ -455,31 +507,44 @@ public sealed class ManagedUpdateTests : IDisposable
         File.WriteAllText(Path.Combine(target, "zapret", "general-installed.bat"), "installed-only");
         var helperType = typeof(ManagedUpdateService).Assembly.GetType("Zapret.Infrastructure.DesktopUpdateHelper")!;
         var script = (string)helperType.GetField("Script", System.Reflection.BindingFlags.Static | System.Reflection.BindingFlags.NonPublic)!.GetRawConstantValue()!;
-        var helperPath = Path.Combine(root, "helper.ps1");
+        if (backupCleanupFailure)
+            // Inject the failure after the swap. Locking an installed file would block
+            // Directory.Move first and test an installation failure instead of cleanup.
+            script = script.Replace("Remove-Item -LiteralPath $backupFull -Recurse -Force",
+                "throw 'Simulated backup cleanup failure'", StringComparison.Ordinal);
+        var jobRoot = Path.Combine(root, "Задания обновления", "ZapretDesktop-update-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(jobRoot);
+        var helperPath = Path.Combine(jobRoot, "apply-update.ps1");
         File.WriteAllText(helperPath, script, new UTF8Encoding(true));
         var shell = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.Windows), "System32", "WindowsPowerShell", "v1.0", "powershell.exe");
         var ownerStart = new ProcessStartInfo(shell) { UseShellExecute = false, CreateNoWindow = true, WindowStyle = ProcessWindowStyle.Hidden };
         foreach (var argument in new[] { "-NoProfile", "-NonInteractive", "-Command", "Start-Sleep -Seconds 30" }) ownerStart.ArgumentList.Add(argument);
         using var owner = Process.Start(ownerStart)!;
-        var jobPath = Path.Combine(root, "helper-job.json");
+        var jobPath = Path.Combine(jobRoot, "update.json");
         var backup = unsafeBackup ? Path.Combine(root, "unrelated") : target + ".backup-" + Guid.NewGuid().ToString("N");
-        var ready = Path.Combine(root, "helper-ready");
-        var log = Path.Combine(root, "helper.log");
+        var ready = Path.Combine(jobRoot, "ready");
+        var log = Path.Combine(jobRoot, "result.log");
         File.WriteAllText(jobPath, JsonSerializer.Serialize(new
         {
             ProcessId = owner.Id, ProcessStartTicks = owner.StartTime.ToUniversalTime().Ticks.ToString(),
-            Source = source, Target = target, Replacement = target + ".update", Backup = backup, Log = log, Ready = ready, Version = "0.3.0",
+            Source = source, Workspace = unsafeWorkspace ? unrelated : workspace,
+            Target = target, Replacement = target + ".update", Backup = backup, Log = log, Ready = ready, Version = "0.3.0",
             Hashes = Directory.GetFiles(source, "*", SearchOption.AllDirectories).ToDictionary(x => Path.GetRelativePath(source, x), x => Convert.ToHexString(SHA256.HashData(File.ReadAllBytes(x))).ToLowerInvariant())
         }));
         if (tampered) File.AppendAllText(Path.Combine(source, "Zapret.Desktop.exe"), "modified");
-        var start = new ProcessStartInfo(shell) { UseShellExecute = false, CreateNoWindow = true, WindowStyle = ProcessWindowStyle.Hidden };
+        // Match ScheduleAsync: the native working directory must not hold the job open.
+        var start = new ProcessStartInfo(shell) { UseShellExecute = false, CreateNoWindow = true,
+            WindowStyle = ProcessWindowStyle.Hidden, WorkingDirectory = Path.GetDirectoryName(jobRoot)! };
         foreach (var argument in new[] { "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", helperPath, "-ManifestPath", jobPath }) start.ArgumentList.Add(argument);
+        using var locked = cleanupFailure
+            ? new FileStream(Path.Combine(workspace, "locked.txt"), FileMode.Create, FileAccess.ReadWrite, FileShare.Read)
+            : null;
         using var updater = Process.Start(start)!;
         try
         {
             var timeout = DateTime.UtcNow.AddSeconds(10);
             while (!File.Exists(ready) && !updater.HasExited && DateTime.UtcNow < timeout) await Task.Delay(50);
-            if (tampered || unsafeBackup)
+            if (tampered || unsafeBackup || unsafeWorkspace)
             {
                 using var failureTimeout = new CancellationTokenSource(TimeSpan.FromSeconds(10));
                 await updater.WaitForExitAsync(failureTimeout.Token);
@@ -487,10 +552,15 @@ public sealed class ManagedUpdateTests : IDisposable
                 Assert.False(File.Exists(ready));
                 Assert.False(Directory.Exists(backup));
                 Assert.Equal("old-version", File.ReadAllText(Path.Combine(target, "Zapret.Desktop.exe")));
-                Assert.Contains(unsafeBackup ? "Unexpected Desktop rollback directory" : "hash mismatch", File.ReadAllText(log));
+                Assert.Contains(unsafeBackup ? "Unexpected Desktop rollback directory" :
+                    unsafeWorkspace ? "Unexpected Desktop staging directory" : "hash mismatch", File.ReadAllText(log));
+                Assert.True(Directory.Exists(jobRoot));
+                Assert.True(Directory.Exists(source));
+                Assert.Equal("other update", File.ReadAllText(unrelatedFile));
                 return;
             }
             Assert.True(File.Exists(ready), File.Exists(log) ? File.ReadAllText(log) : "Helper never initialized.");
+            Assert.True(Directory.Exists(source));
             Assert.False(owner.HasExited);
             Assert.Equal("old-version", File.ReadAllText(Path.Combine(target, "Zapret.Desktop.exe")));
             if (failAfterExit) File.AppendAllText(Path.Combine(source, "Zapret.Desktop.exe"), "changed after ready");
@@ -509,21 +579,35 @@ public sealed class ManagedUpdateTests : IDisposable
                 Assert.Equal("custom.example\n", File.ReadAllText(Path.Combine(target, "zapret", "lists", "list-general.txt")));
                 if (failAfterExit) Assert.Contains("hash mismatch", failure.Detail);
                 else Assert.Contains("Cannot write installation log", failure.Detail);
+                Assert.True(Directory.Exists(jobRoot));
+                Assert.True(Directory.Exists(source));
                 return;
             }
             Assert.Equal(0, updater.ExitCode);
             Assert.Equal("new-version", File.ReadAllText(Path.Combine(target, "Zapret.Desktop.exe")));
-            Assert.False(Directory.Exists(backup));
+            Assert.Equal(backupCleanupFailure, Directory.Exists(backup));
             Assert.Equal("user-settings", File.ReadAllText(Path.Combine(target, "settings.json")));
             Assert.Equal("user-data", File.ReadAllText(Path.Combine(target, "custom.txt")));
             Assert.Equal("custom.example\n", File.ReadAllText(Path.Combine(target, "zapret", "lists", "list-general.txt")));
-            Assert.StartsWith("SUCCESS:", File.ReadAllText(log));
+            Assert.Equal(cleanupFailure || backupCleanupFailure, Directory.Exists(jobRoot));
+            Assert.Equal(cleanupFailure, Directory.Exists(workspace));
+            Assert.Equal("other update", File.ReadAllText(unrelatedFile));
             Assert.Equal("set LOCAL_VERSION=" + installedVersion, File.ReadAllText(Path.Combine(target, "zapret", "service.bat")));
             Assert.True(File.Exists(Path.Combine(target, "zapret", "general-installed.bat")));
             Assert.False(File.Exists(Path.Combine(target, "zapret", "general-new.bat")));
             var outcome = JsonSerializer.Deserialize<DesktopUpdateOutcome>(File.ReadAllText(target + ".update-result.json"))!;
             Assert.True(outcome.Success);
             Assert.Equal("0.3.0", outcome.Version);
+            if (cleanupFailure)
+            {
+                Assert.Contains("временные файлы обновления не удалось удалить", outcome.Detail);
+                Assert.Contains("Cannot remove temporary update files", File.ReadAllText(log));
+            }
+            if (backupCleanupFailure)
+            {
+                Assert.Contains("временную папку предыдущей версии не удалось удалить", outcome.Detail);
+                Assert.Contains("Cannot remove temporary rollback directory", File.ReadAllText(log));
+            }
         }
         finally
         {

@@ -2,7 +2,7 @@
 
 Приложение для управления Zapret в Windows 10/11 x64. Устанавливать .NET отдельно не требуется.
 
-Версия Desktop: 0.4.0.
+Версия Desktop: 0.4.1.
 
 ## Первый запуск
 
@@ -42,4 +42,4 @@
 
 Откройте раздел Telegram прокси → Запустить прокси → Открыть в Telegram. Сервер слушает только 127.0.0.1:1443; если порт занят, измените его в настройках прокси и сохраните. Ключ показан в карточке подключения и защищён Windows DPAPI при хранении. Круговая стрелка справа обновляет ключ; после этого подключите Telegram заново. Автозапуск отключён по умолчанию. При полном выходе Desktop прокси останавливается, при сворачивании в трей продолжает работать. Запуск и остановка Zapret независимы от прокси.
 
-Автор оригинального TG WS Proxy — Flowseal (https://github.com/Flowseal/tg-ws-proxy), адаптация на C# по ревизии 2085861957070eeea07990a522b29f42e5230210, MIT (licenses/TG-WS-Proxy-LICENSE.txt). Модуль обновляется только вместе с Desktop. Подробности и ограничения: https://github.com/fecset/zapret-desktop/blob/v0.4.0/docs/TELEGRAM_PROXY.md
+Автор оригинального TG WS Proxy — Flowseal (https://github.com/Flowseal/tg-ws-proxy), адаптация на C# по ревизии 2085861957070eeea07990a522b29f42e5230210, MIT (licenses/TG-WS-Proxy-LICENSE.txt). Модуль обновляется только вместе с Desktop. Подробности и ограничения: https://github.com/fecset/zapret-desktop/blob/v0.4.1/docs/TELEGRAM_PROXY.md

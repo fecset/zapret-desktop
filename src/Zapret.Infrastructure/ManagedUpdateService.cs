@@ -169,8 +169,14 @@ public sealed class ManagedUpdateService : IManagedUpdateService
                 if (Directory.Exists(replacement)) UpdateFiles.DeleteTree(replacement);
                 throw;
             }
-            var result = new ManagedUpdateResult(plan.Id, plan.Version, target, backup,
-                $"zapret {plan.Version} применён. Резервная копия: {backup}");
+            var summary = $"zapret {plan.Version} применён. Резервная копия: {backup}";
+            try { UpdateFiles.DeleteTree(Path.Combine(stagingDirectory, plan.Id)); }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidDataException)
+            {
+                // The swap is committed; a cleanup failure must not undo a working update.
+                summary += " Не удалось удалить временные файлы обновления: " + ex.Message;
+            }
+            var result = new ManagedUpdateResult(plan.Id, plan.Version, target, backup, summary);
             applied[plan.Id] = result;
             updates.TryRemove(plan.Id, out _);
             return result;
@@ -210,7 +216,7 @@ public sealed class ManagedUpdateService : IManagedUpdateService
             UpdateFiles.RequireNoLinks(applicationDirectory);
             if (currentProcessId != Environment.ProcessId) throw new InvalidOperationException("Only the current Desktop process can schedule its own update.");
             var schedule = await DesktopUpdateHelper.ScheduleAsync(plan, prepared.Hashes, applicationDirectory,
-                currentProcessId, cancellationToken);
+                Path.Combine(stagingDirectory, plan.Id), currentProcessId, cancellationToken);
             updates.TryRemove(plan.Id, out _);
             return schedule;
         }
