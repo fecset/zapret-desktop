@@ -95,7 +95,7 @@ try {
         'licenses/DotNet-LICENSE.txt', 'licenses/Runtime-NOTICES.txt', 'licenses/Inter-OFL.txt', 'licenses/JetBrainsMono-OFL.txt', 'licenses/FluentIcons-LICENSE.txt',
         'licenses/Cygwin-NEWLIB-NOTICES.txt', 'licenses/Winws-NOTICES.txt',
         'licenses/Cygwin-LICENSE.txt', 'licenses/LGPL-3.0.txt', 'licenses/GPL-3.0.txt',
-        'zapret/service.bat', 'zapret/bin/winws.exe', 'zapret/bin/WinDivert.dll', 'zapret/bin/WinDivert64.sys',
+        'zapret/service.bat', 'zapret/bin/winws.exe', 'zapret/bin/cygwin1.dll', 'zapret/bin/WinDivert.dll', 'zapret/bin/WinDivert64.sys',
         'zapret/lists/list-general.txt', 'zapret/utils/test zapret.ps1')) {
         $path = Join-Path $publishRoot $required
         if (-not (Test-Path -LiteralPath $path -PathType Leaf) -or (Get-Item -LiteralPath $path).Length -eq 0) {

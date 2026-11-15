@@ -477,7 +477,7 @@ public sealed partial class MainViewModel(IZapretDistribution distribution, IStr
         Message = "Ошибка: " + context + ": " + exception.Message;
         Log("ERROR", context + ": " + exception);
     }
-    public async Task<bool> StopOwnedForExitAsync()
+    public async Task<bool> StopOwnedForExitAsync(bool preserveDesktopUpdate = false)
     {
         exitRequested = true;
         CancelStrategyTest();
@@ -495,6 +495,7 @@ public sealed partial class MainViewModel(IZapretDistribution distribution, IStr
                 Log("WARN", "IPSet требует восстановления при следующем запуске: " + ex.Message);
             }
             if (await process.StopOwnedAsync()) Log("INFO", "Запущенный приложением Zapret остановлен при выходе.");
+            await DiscardPendingPreparationsAsync(preserveDesktopUpdate);
             return true;
         }
         catch (Exception ex)

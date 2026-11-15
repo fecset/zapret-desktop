@@ -5,7 +5,16 @@ namespace Zapret.Core.Tests;
 
 public class IntegrationTests
 {
-    private static string Root => Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "../../../../../zapret"));
+    private static string Root
+    {
+        get
+        {
+            for (var directory = new DirectoryInfo(AppContext.BaseDirectory); directory is not null; directory = directory.Parent)
+                if (File.Exists(Path.Combine(directory.FullName, "ZapretDesktop.slnx")))
+                    return Path.Combine(directory.FullName, "zapret");
+            throw new DirectoryNotFoundException("Cannot find the repository distribution for integration tests.");
+        }
+    }
 
     [Fact]
     public async Task ReadsServiceStatusWithoutParsingLocalizedScOutput()

@@ -22,7 +22,7 @@ public sealed class ZapretDistribution(string root) : IZapretDistribution
     public IReadOnlyList<string> Validate()
     {
         var missing = new List<string>();
-        foreach (var file in new[] { "bin/winws.exe", "bin/WinDivert.dll", "bin/WinDivert64.sys", "service.bat", "lists/list-general.txt" })
+        foreach (var file in new[] { "bin/winws.exe", "bin/cygwin1.dll", "bin/WinDivert.dll", "bin/WinDivert64.sys", "service.bat", "lists/list-general.txt" })
             if (!File.Exists(Path.Combine(Root, file))) missing.Add(file);
         if (!Directory.Exists(ListsDirectory)) missing.Add("lists/");
         if (!Directory.Exists(Root) || !Directory.EnumerateFiles(Root, "general*.bat").Any()) missing.Add("general*.bat");

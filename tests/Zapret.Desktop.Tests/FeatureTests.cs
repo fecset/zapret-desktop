@@ -25,6 +25,32 @@ public sealed class FeatureTests
         Assert.Contains("--wf-tcp=8443", app.Service.RunningStrategy!.Arguments);
     }
 
+    [Fact]
+    public async Task DistributionRollbackRefreshesStoppedServiceBeforeItsNextScmStart()
+    {
+        string? strategyFile = null;
+        const string original = "start \"test\" /min \"%BIN%winws.exe\" --wf-tcp=80";
+        using var app = new TestApplication(managedUpdates: new MemoryUpdates(
+            apply: () => File.WriteAllText(strategyFile!, "start \"test\" /min \"%BIN%winws.exe\" --wf-tcp=8443"),
+            rollback: () => File.WriteAllText(strategyFile!, original)));
+        await app.ViewModel.InitializeAsync();
+        strategyFile = app.ViewModel.SelectedStrategy!.SourceFile;
+        await File.WriteAllTextAsync(strategyFile, original, TestContext.Current.CancellationToken);
+        await app.Service.InstallAsync(app.ViewModel.SelectedStrategy, TestContext.Current.CancellationToken);
+        await app.Service.StopAsync(TestContext.Current.CancellationToken);
+        await app.ViewModel.UpdateDistributionAsync();
+        await app.Service.StartAsync(TestContext.Current.CancellationToken);
+        Assert.Contains("--wf-tcp=8443", app.Service.RunningStrategy!.Arguments);
+        await app.Service.StopAsync(TestContext.Current.CancellationToken);
+        await app.ViewModel.RollbackDistributionUpdateAsync();
+        Assert.False(app.ViewModel.MessageIsError);
+        Assert.Equal("Stopped", await app.Service.GetStatusAsync(TestContext.Current.CancellationToken));
+        // Starting directly models SCM/autostart: it must use already refreshed binPath arguments.
+        await app.Service.StartAsync(TestContext.Current.CancellationToken);
+        Assert.Contains("--wf-tcp=80", app.Service.RunningStrategy!.Arguments);
+        Assert.DoesNotContain("--wf-tcp=8443", app.Service.RunningStrategy.Arguments);
+    }
+
     [Theory]
     [InlineData(true)]
     [InlineData(false)]
@@ -96,7 +122,7 @@ public sealed class FeatureTests
             Task.FromResult(new UpdateInfo("Desktop", localVersion, localVersion, "", false));
     }
 
-    private sealed class MemoryUpdates(Action? apply = null, DesktopUpdateOutcome? outcome = null) : IManagedUpdateService
+    private sealed class MemoryUpdates(Action? apply = null, DesktopUpdateOutcome? outcome = null, Action? rollback = null) : IManagedUpdateService
     {
         public Task<DesktopUpdateOutcome?> ReadDesktopUpdateOutcomeAsync(CancellationToken cancellationToken = default) => Task.FromResult(outcome);
         public Task<ManagedUpdatePlan> PrepareDistributionAsync(IProgress<ManagedUpdateProgress>? progress = null,
@@ -107,7 +133,11 @@ public sealed class FeatureTests
             apply?.Invoke();
             return Task.FromResult(new ManagedUpdateResult("test", "test", "", "", "test"));
         }
-        public Task RollbackDistributionAsync(ManagedUpdateResult result, CancellationToken cancellationToken = default) => Task.CompletedTask;
+        public Task RollbackDistributionAsync(ManagedUpdateResult result, CancellationToken cancellationToken = default)
+        {
+            rollback?.Invoke();
+            return Task.CompletedTask;
+        }
         public Task<ManagedUpdatePlan> PrepareDesktopAsync(string localVersion,
             IProgress<ManagedUpdateProgress>? progress = null, CancellationToken cancellationToken = default) => throw new NotSupportedException();
         public Task<DesktopUpdateSchedule> ScheduleDesktopUpdateAsync(ManagedUpdatePlan plan, int currentProcessId, CancellationToken cancellationToken = default) => throw new NotSupportedException();

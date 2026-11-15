@@ -7,6 +7,37 @@ namespace Zapret.Core.Tests;
 public sealed class StrategyProtocolRegressionTests
 {
     [Theory]
+    [InlineData(0, 3, 0, 0, 1, false)]
+    [InlineData(0, 0, 3, 0, 0, false)]
+    [InlineData(0, 3, 0, 1, 0, true)]
+    public async Task RecommendationRequiresAtLeastOneSuccessfulCheck(
+        int httpOk, int httpFailed, int unsupported, int pingOk, int pingFailed, bool recommended)
+    {
+        var root = Path.Combine(Path.GetTempPath(), "Zapret-zero-success-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(root);
+        try
+        {
+            await File.WriteAllTextAsync(Path.Combine(root, "general.bat"),
+                "start \"test\" /min \"%BIN%winws.exe\" --wf-tcp=80");
+            var script = "param([switch]$DesktopMode, [string]$DistributionRoot)\n" +
+                "Write-Host '__ZD_START__|general.bat'\n[void][Console]::ReadLine()\n" +
+                $"Write-Host '__ZD_RESULT__|general.bat|{httpOk}|{httpFailed}|{unsupported}|{pingOk}|{pingFailed}'\n";
+            var distribution = new ZapretDistribution(root);
+            var tester = new PowerShellStrategyTester(distribution, new NoService(), new NoProcess(), new Privilege(),
+                new BatStrategyProvider(distribution), _ => Task.FromResult(script));
+            var checks = new List<StrategyCheckProgress>();
+            using var cancellation = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+            var result = await tester.RunAsync(new Immediate<string>(_ => { }),
+                new Immediate<StrategyCheckProgress>(checks.Add), cancellation.Token);
+            Assert.Equal(recommended ? "general.bat" : null, result.BestStrategy);
+            var completed = Assert.Single(checks, check => check.State == StrategyCheckState.Completed);
+            Assert.Equal(httpOk, completed.HttpOk);
+            Assert.Equal(pingOk, completed.PingOk);
+        }
+        finally { await DeleteTestDirectoryAsync(root); }
+    }
+
+    [Theory]
     [InlineData(2, 0, "general (ALT).bat")]
     [InlineData(1, 2, "general (ALT).bat")]
     [InlineData(1, 1, "general.bat")]

@@ -66,6 +66,8 @@ public interface IManagedUpdateService
         CancellationToken cancellationToken = default);
     Task<ManagedUpdatePlan> PrepareDesktopAsync(string localVersion, IProgress<ManagedUpdateProgress>? progress = null,
         CancellationToken cancellationToken = default);
+    /// <summary>Discards an unapplied plan owned by this service; completed or unknown plans are left unchanged.</summary>
+    Task DiscardPreparedAsync(string id, CancellationToken cancellationToken = default) => Task.CompletedTask;
     Task<ManagedUpdateResult> ApplyDistributionAsync(ManagedUpdatePlan plan, CancellationToken cancellationToken = default);
     Task RollbackDistributionAsync(ManagedUpdateResult result, CancellationToken cancellationToken = default);
     Task<DesktopUpdateSchedule> ScheduleDesktopUpdateAsync(ManagedUpdatePlan plan, int currentProcessId,

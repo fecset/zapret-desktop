@@ -79,6 +79,130 @@ public sealed class ManagedUpdateTests : IDisposable
         Assert.False(File.Exists(Path.Combine(DistributionRoot, "service.bat")));
     }
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task DiscardRemovesOnlyTheKnownPendingWorkspace(bool nestedPackage)
+    {
+        var files = DistributionFiles();
+        if (nestedPackage) files = files.Select(x => ("release/" + x.Item1, x.Item2));
+        using var client = Client(Zip(files));
+        var service = Service(client);
+        var first = await service.PrepareDistributionAsync();
+        var second = await service.PrepareDistributionAsync();
+        var unknownId = Guid.NewGuid().ToString("N");
+        var unknownWorkspace = Path.Combine(root, "stage", unknownId);
+        Directory.CreateDirectory(unknownWorkspace);
+        File.WriteAllText(Path.Combine(unknownWorkspace, "keep.txt"), "not owned by this service");
+
+        await service.DiscardPreparedAsync(first.Id);
+        await service.DiscardPreparedAsync(first.Id);
+        await service.DiscardPreparedAsync(unknownId);
+
+        Assert.False(Directory.Exists(Path.Combine(root, "stage", first.Id)));
+        Assert.True(Directory.Exists(second.PreparedDirectory));
+        Assert.Equal("not owned by this service", File.ReadAllText(Path.Combine(unknownWorkspace, "keep.txt")));
+        await Assert.ThrowsAsync<InvalidOperationException>(() => service.ApplyDistributionAsync(first));
+        var result = await service.ApplyDistributionAsync(second);
+        await service.DiscardPreparedAsync(second.Id);
+        Assert.True(Directory.Exists(result.InstalledDirectory));
+        Assert.True(Directory.Exists(result.BackupDirectory));
+        await service.RollbackDistributionAsync(result);
+    }
+
+    [Fact]
+    public async Task FailedDiscardCanRetryAfterTheWorkspaceFileIsUnlocked()
+    {
+        using var client = Client(Zip(DistributionFiles()));
+        var service = Service(client);
+        var plan = await service.PrepareDistributionAsync();
+        using (var locked = new FileStream(Path.Combine(plan.PreparedDirectory, "service.bat"), FileMode.Open,
+            FileAccess.Read, FileShare.Read))
+        {
+            await Assert.ThrowsAnyAsync<IOException>(() => service.DiscardPreparedAsync(plan.Id));
+            Assert.True(Directory.Exists(plan.PreparedDirectory));
+        }
+
+        await service.DiscardPreparedAsync(plan.Id);
+
+        Assert.False(Directory.Exists(Path.Combine(root, "stage", plan.Id)));
+        await Assert.ThrowsAsync<InvalidOperationException>(() => service.ApplyDistributionAsync(plan));
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task DiscardConsumesOnlyTheSelectedDataPreview(bool hosts)
+    {
+        using var client = TextClient(hosts ? "203.0.113.5 video.example\n" : "1.2.3.0/24\n");
+        var service = Service(client);
+        if (hosts)
+        {
+            var first = await service.PreviewHostsAsync();
+            var second = await service.PreviewHostsAsync();
+            await service.DiscardPreparedAsync(first.Id);
+            await Assert.ThrowsAsync<InvalidOperationException>(() => service.ApplyHostsAsync(first));
+            Assert.Equal("127.0.0.1 localhost\n192.0.2.1 my.local\n", File.ReadAllText(HostsPath));
+            await service.ApplyHostsAsync(second);
+            Assert.Contains("video.example", File.ReadAllText(HostsPath));
+        }
+        else
+        {
+            var first = await service.PrepareIpSetAsync();
+            var second = await service.PrepareIpSetAsync();
+            await service.DiscardPreparedAsync(first.Id);
+            await Assert.ThrowsAsync<InvalidOperationException>(() => service.ApplyIpSetAsync(first));
+            Assert.Equal("8.8.8.8/32\n", File.ReadAllText(Path.Combine(DistributionRoot, "lists", "ipset-all.txt")));
+            await service.ApplyIpSetAsync(second);
+            Assert.Equal("1.2.3.0/24\n", File.ReadAllText(Path.Combine(DistributionRoot, "lists", "ipset-all.txt")));
+        }
+    }
+
+    [Fact]
+    public async Task CancelledFileOperationsKeepPreparedUpdatesAndRollbackUsable()
+    {
+        using var client = Client(Zip(DistributionFiles()));
+        var service = Service(client);
+        var plan = await service.PrepareDistributionAsync();
+        using var cancellation = new CancellationTokenSource();
+        cancellation.Cancel();
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => service.DiscardPreparedAsync(plan.Id, cancellation.Token));
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => service.ApplyDistributionAsync(plan, cancellation.Token));
+        Assert.True(Directory.Exists(plan.PreparedDirectory));
+        Assert.False(File.Exists(Path.Combine(DistributionRoot, "service.bat")));
+        var result = await service.ApplyDistributionAsync(plan);
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => service.RollbackDistributionAsync(result, cancellation.Token));
+        Assert.True(File.Exists(Path.Combine(DistributionRoot, "service.bat")));
+        Assert.True(Directory.Exists(result.BackupDirectory));
+        await service.RollbackDistributionAsync(result);
+        Assert.False(File.Exists(Path.Combine(DistributionRoot, "service.bat")));
+    }
+
+    [Fact]
+    public async Task DistributionApplyDoesNotUseTheCallersSynchronizationContextForFileWork()
+    {
+        using var client = Client(Zip(DistributionFiles()));
+        var context = new ForwardingSynchronizationContext();
+        SynchronizationContext? fileContext = context;
+        var distribution = new ObservedDistribution(new ZapretDistribution(DistributionRoot),
+            () => fileContext = SynchronizationContext.Current);
+        var service = new ManagedUpdateService(distribution, client,
+            Path.Combine(root, "application"), Path.Combine(root, "stage"), HostsPath);
+        var plan = await service.PrepareDistributionAsync();
+        var previous = SynchronizationContext.Current;
+        Task<ManagedUpdateResult> apply;
+        try
+        {
+            SynchronizationContext.SetSynchronizationContext(context);
+            apply = service.ApplyDistributionAsync(plan);
+        }
+        finally { SynchronizationContext.SetSynchronizationContext(previous); }
+
+        await apply;
+        Assert.Null(fileContext);
+    }
+
     [Fact]
     public async Task DistributionCleanupFailureReportsWarningWithoutUndoingUpdateOrRollback()
     {
@@ -187,6 +311,24 @@ public sealed class ManagedUpdateTests : IDisposable
         using var strategy = Client(Zip(DistributionFiles().Where(x => x.Item1 != "general.bat")
             .Append(("general.bat", Encoding.UTF8.GetBytes("start \"zapret\" \"%BIN%winws.exe\" --bad=%EVIL%")))));
         await Assert.ThrowsAsync<InvalidDataException>(() => Service(strategy).PrepareDistributionAsync());
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task RejectsMissingOrInvalidCygwinDependency(bool invalid)
+    {
+        var files = invalid
+            ? DistributionFiles().Select(file => file.Item1 == "bin/cygwin1.dll"
+                ? (file.Item1, Encoding.UTF8.GetBytes("not a PE library")) : file)
+            : DistributionFiles().Where(file => file.Item1 != "bin/cygwin1.dll");
+        using var client = Client(Zip(files));
+
+        var failure = await Assert.ThrowsAsync<InvalidDataException>(() => Service(client).PrepareDistributionAsync());
+
+        Assert.Contains("cygwin1.dll", failure.Message);
+        Assert.Empty(Directory.GetDirectories(Path.Combine(root, "stage")));
+        Assert.Contains("bin/cygwin1.dll", new ZapretDistribution(DistributionRoot).Validate());
     }
 
     [Fact]
@@ -459,6 +601,9 @@ public sealed class ManagedUpdateTests : IDisposable
         Assert.Equal("installed", File.ReadAllText(Path.Combine(app, "Zapret.Desktop.exe")));
         await Assert.ThrowsAsync<InvalidOperationException>(() => service.ScheduleDesktopUpdateAsync(plan, int.MaxValue));
         Assert.Equal("installed", File.ReadAllText(Path.Combine(app, "Zapret.Desktop.exe")));
+        await service.DiscardPreparedAsync(plan.Id);
+        Assert.False(Directory.Exists(Path.Combine(root, "stage", plan.Id)));
+        Assert.Equal("installed", File.ReadAllText(Path.Combine(app, "Zapret.Desktop.exe")));
     }
 
     [Theory]
@@ -622,6 +767,7 @@ public sealed class ManagedUpdateTests : IDisposable
     private static IEnumerable<(string, byte[])> DistributionFiles()
     {
         yield return ("bin/winws.exe", Pe());
+        yield return ("bin/cygwin1.dll", Pe());
         yield return ("bin/WinDivert.dll", Pe());
         yield return ("bin/WinDivert64.sys", Pe());
         yield return ("service.bat", Encoding.UTF8.GetBytes("set LOCAL_VERSION=1.11.0\n"));
@@ -689,6 +835,25 @@ public sealed class ManagedUpdateTests : IDisposable
     private sealed class InlineProgress<T>(Action<T> report) : IProgress<T>
     {
         public void Report(T value) => report(value);
+    }
+
+    private sealed class ObservedDistribution(IZapretDistribution inner, Action onRootRead) : IZapretDistribution
+    {
+        public string Root { get { onRootRead(); return inner.Root; } }
+        public string BinDirectory => inner.BinDirectory;
+        public string ListsDirectory => inner.ListsDirectory;
+        public string? Version => inner.Version;
+        public IReadOnlyList<string> Validate() => inner.Validate();
+    }
+
+    private sealed class ForwardingSynchronizationContext : SynchronizationContext
+    {
+        public override void Post(SendOrPostCallback callback, object? state) => ThreadPool.QueueUserWorkItem(_ =>
+        {
+            var previous = Current;
+            try { SetSynchronizationContext(this); callback(state); }
+            finally { SetSynchronizationContext(previous); }
+        });
     }
 
     private sealed class Handler(Func<HttpRequestMessage, HttpResponseMessage> respond) : HttpMessageHandler

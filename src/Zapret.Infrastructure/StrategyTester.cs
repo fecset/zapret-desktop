@@ -64,7 +64,8 @@ public sealed class PowerShellStrategyTester : IStrategyTester
         string? currentFile = null;
         var expectingResult = false;
         var completed = new Dictionary<string, StrategyCheckProgress>(StringComparer.OrdinalIgnoreCase);
-        string? BestCompleted() => completed.Values.OrderByDescending(check => check.HttpOk)
+        string? BestCompleted() => completed.Values.Where(check => check.HttpOk > 0 || check.PingOk > 0)
+            .OrderByDescending(check => check.HttpOk)
             .ThenByDescending(check => check.PingOk).FirstOrDefault()?.FileName;
         try
         {

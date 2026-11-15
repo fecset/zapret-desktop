@@ -12,6 +12,9 @@ public sealed partial class MainWindow
     private Action? refreshTelegramPage;
     private Action? refreshTelegramHome;
     private Action? refreshTelegramSidebar;
+    private TelegramPageDraft? telegramPageDraft;
+    private sealed record TelegramPageDraft(string Port, bool AutoStart, bool VerboseLogging, bool CfProxy,
+        bool Http2Media, bool DirectTcp, string DcOverrides, string CfDomains, string WorkerDomains, bool Expanded);
     private readonly DispatcherTimer telegramStatsTimer = new() { Interval = TimeSpan.FromSeconds(1) };
     public void OpenTelegramProxy() { Show("Telegram прокси"); base.Show(); Activate(); }
     private void InitializeTelegramUi()
@@ -151,23 +154,27 @@ public sealed partial class MainWindow
         AutomationProperties.SetHelpText(regenerate, "Создаёт новый ключ. Работающий прокси перезапустится; подключите Telegram заново.");
         AutomationProperties.SetAutomationId(regenerate, "TelegramRegenerateKey"); Grid.SetColumn(regenerate, 1); keyRow.Children.Add(regenerate);
         connection.Children.Add(keyRow); connection.Children.Add(keyNotice);
-        var open = Button("Открыть в Telegram", () => { if (proxy.CanConnect) openReleasePage(proxy.ConnectionUri); return Task.CompletedTask; }, primary: true);
+        var open = Button("Открыть в Telegram", () => { proxy.OpenInTelegram(openReleasePage); return Task.CompletedTask; }, primary: true);
         open.HorizontalAlignment = HorizontalAlignment.Left; connection.Children.Add(open); page.Children.Add(Panel(connection));
         var stats = new StackPanel { Spacing = 8 }; stats.Children.Add(Text("Статистика", 17, FontWeight.SemiBold));
         var counters = Text("", 13); AutomationProperties.SetAutomationId(counters, "TelegramStatistics"); stats.Children.Add(counters);
         var lastConnectionIssue = Text("", 12, color: MutedBrush); stats.Children.Add(lastConnectionIssue); page.Children.Add(Panel(stats));
 
         var settings = new StackPanel { Spacing = 12 };
-        var auto = Check("Запускать вместе с Zapret Desktop", proxy.Draft.AutoStart); settings.Children.Add(auto);
-        var port = Input("1443", 160); port.HorizontalAlignment = HorizontalAlignment.Left; port.Text = proxy.Draft.Port.ToString(); AutomationProperties.SetName(port, "Локальный порт"); settings.Children.Add(Labelled("Локальный порт", port));
-        var verbose = Check("Подробный журнал", proxy.Draft.VerboseLogging); settings.Children.Add(verbose);
-        var cf = Check("Резервный маршрут CfProxy", proxy.Draft.CfProxy); settings.Children.Add(cf);
-        var h2 = Check("HTTP/2 для фото и видео", proxy.Draft.Http2Media); settings.Children.Add(h2);
-        var tcp = Check("Разрешить прямое TCP-подключение", proxy.Draft.DirectTcp); settings.Children.Add(tcp);
+        var draft = telegramPageDraft ?? new TelegramPageDraft(proxy.Draft.Port.ToString(), proxy.Draft.AutoStart,
+            proxy.Draft.VerboseLogging, proxy.Draft.CfProxy, proxy.Draft.Http2Media, proxy.Draft.DirectTcp,
+            string.Join(Environment.NewLine, proxy.Draft.DcOverrides.Select(x => $"{x.Key}:{x.Value}")),
+            string.Join(", ", proxy.Draft.CfDomains), string.Join(", ", proxy.Draft.WorkerDomains), false);
+        var auto = Check("Запускать вместе с Zapret Desktop", draft.AutoStart); settings.Children.Add(auto);
+        var port = Input("1443", 160); port.HorizontalAlignment = HorizontalAlignment.Left; port.Text = draft.Port; AutomationProperties.SetName(port, "Локальный порт"); settings.Children.Add(Labelled("Локальный порт", port));
+        var verbose = Check("Подробный журнал", draft.VerboseLogging); settings.Children.Add(verbose);
+        var cf = Check("Резервный маршрут CfProxy", draft.CfProxy); settings.Children.Add(cf);
+        var h2 = Check("HTTP/2 для фото и видео", draft.Http2Media); settings.Children.Add(h2);
+        var tcp = Check("Разрешить прямое TCP-подключение", draft.DirectTcp); settings.Children.Add(tcp);
         var dc = Input("2:149.154.167.220", 520); dc.HorizontalAlignment = HorizontalAlignment.Left;
         dc.Height = 112; dc.AcceptsReturn = true; dc.TextWrapping = TextWrapping.NoWrap;
         dc.VerticalContentAlignment = VerticalAlignment.Top; dc.Padding = new Thickness(12, 10);
-        dc.Text = string.Join(Environment.NewLine, proxy.Draft.DcOverrides.Select(x => $"{x.Key}:{x.Value}"));
+        dc.Text = draft.DcOverrides;
         AutomationProperties.SetName(dc, "Датацентры Telegram (DC → IP)"); AutomationProperties.SetAutomationId(dc, "TelegramDcOverrides");
         settings.Children.Add(Labelled("Датацентры Telegram (DC → IP)", dc));
         settings.Children.Add(Text("Одно правило на строку: номер:IP", 12, color: MutedBrush));
@@ -175,9 +182,9 @@ public sealed partial class MainWindow
         {
             var input = Input("", 520); input.HorizontalAlignment = HorizontalAlignment.Left; input.Text = value; AutomationProperties.SetName(input, name); settings.Children.Add(Labelled(name, input)); return input;
         }
-        var domains = RoutingInput("Домены CfProxy", string.Join(", ", proxy.Draft.CfDomains));
+        var domains = RoutingInput("Домены CfProxy", draft.CfDomains);
         domains.PlaceholderText = "По умолчанию — список Flowseal";
-        var workers = RoutingInput("Домены Worker", string.Join(", ", proxy.Draft.WorkerDomains)); workers.PlaceholderText = "Необязательно";
+        var workers = RoutingInput("Домены Worker", draft.WorkerDomains); workers.PlaceholderText = "Необязательно";
         var localError = Text("", 12, color: BadBrush); settings.Children.Add(localError);
         var save = Button("Сохранить настройки", async () =>
         {
@@ -199,7 +206,12 @@ public sealed partial class MainWindow
             catch (ArgumentException ex) { localError.Foreground = BadBrush; localError.Text = ex.Message; }
         });
         save.HorizontalAlignment = HorizontalAlignment.Left; settings.Children.Add(save);
-        page.Children.Add(Panel(new Expander { Header = "Настройки прокси", Content = settings, HorizontalAlignment = HorizontalAlignment.Stretch }));
+        var settingsExpander = new Expander { Header = "Настройки прокси", Content = settings,
+            IsExpanded = draft.Expanded, HorizontalAlignment = HorizontalAlignment.Stretch };
+        page.Children.Add(Panel(settingsExpander));
+        capturePageDraft = () => telegramPageDraft = new TelegramPageDraft(port.Text ?? "", auto.IsChecked == true,
+            verbose.IsChecked == true, cf.IsChecked == true, h2.IsChecked == true, tcp.IsChecked == true,
+            dc.Text ?? "", domains.Text ?? "", workers.Text ?? "", settingsExpander.IsExpanded);
         refreshTelegramPage = () =>
         {
             var s = proxy.Snapshot; UpdateTelegramStatusPill(statePill, title);

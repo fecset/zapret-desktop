@@ -88,7 +88,7 @@ public sealed class TelegramProxyTests
         var proxy = new TelegramProxyViewModel(server, new MemoryStore { Value = new TelegramProxyOptions { Port = 1443, Secret = new string('1', 32) } });
         using var app = new TestApplication(telegramProxy: proxy, connection: new AvailableHealth());
         Directory.CreateDirectory(app.Distribution.BinDirectory);
-        foreach (var name in new[] { "winws.exe", "WinDivert.dll", "WinDivert64.sys" })
+        foreach (var name in new[] { "winws.exe", "WinDivert.dll", "WinDivert64.sys", "cygwin1.dll" })
             File.WriteAllText(Path.Combine(app.Distribution.BinDirectory, name), "test fixture");
         File.WriteAllText(Path.Combine(app.Distribution.Root, "service.bat"), "set LOCAL_VERSION=1.10.4");
         File.WriteAllText(Path.Combine(app.Distribution.ListsDirectory, "list-general.txt"), "example.test");
@@ -154,7 +154,7 @@ public sealed class TelegramProxyTests
         await using var server = new TelegramProxyServer(); var store = new MemoryStore { Value = new TelegramProxyOptions { Port = OtherPort(), Secret = new string('1',32) } };
         var proxy = new TelegramProxyViewModel(server,store); using var app = new TestApplication(telegramProxy:proxy,connection:new AvailableHealth());
         Directory.CreateDirectory(app.Distribution.BinDirectory);
-        foreach (var name in new[] { "winws.exe","WinDivert.dll","WinDivert64.sys" }) File.WriteAllText(Path.Combine(app.Distribution.BinDirectory,name),"test fixture");
+        foreach (var name in new[] { "winws.exe","WinDivert.dll","WinDivert64.sys","cygwin1.dll" }) File.WriteAllText(Path.Combine(app.Distribution.BinDirectory,name),"test fixture");
         File.WriteAllText(Path.Combine(app.Distribution.Root,"service.bat"),"set LOCAL_VERSION=1.10.4"); File.WriteAllText(Path.Combine(app.Distribution.ListsDirectory,"list-general.txt"),"example.test");
         await app.Settings.SaveAsync(new DesktopSettings { Theme = theme, CheckUpdates = false, CheckConnectionAfterStart = false },TestContext.Current.CancellationToken);
         var window = new MainWindow(app.ViewModel) { Width=width,Height=height }; window.Show(); await window.InitializeAsync();
@@ -257,7 +257,7 @@ public sealed class TelegramProxyTests
         var memory = new MemoryProxy(); var proxy = new TelegramProxyViewModel(memory,new MemoryStore { Value = new TelegramProxyOptions { Secret = new string('1',32),AutoStart = true } });
         using var app = new TestApplication(telegramProxy:proxy,connection:new AvailableHealth());
         Directory.CreateDirectory(app.Distribution.BinDirectory);
-        foreach (var name in new[] { "winws.exe","WinDivert.dll","WinDivert64.sys" }) File.WriteAllText(Path.Combine(app.Distribution.BinDirectory,name),"test fixture");
+        foreach (var name in new[] { "winws.exe","WinDivert.dll","WinDivert64.sys","cygwin1.dll" }) File.WriteAllText(Path.Combine(app.Distribution.BinDirectory,name),"test fixture");
         File.WriteAllText(Path.Combine(app.Distribution.Root,"service.bat"),"set LOCAL_VERSION=1.10.4"); File.WriteAllText(Path.Combine(app.Distribution.ListsDirectory,"list-general.txt"),"example.test");
         await app.Settings.SaveAsync(new DesktopSettings { CheckUpdates = false,CheckConnectionAfterStart = false },TestContext.Current.CancellationToken);
         var window = new MainWindow(app.ViewModel); window.Show(); await window.InitializeAsync();
@@ -299,12 +299,99 @@ public sealed class TelegramProxyTests
         memory.Warn("unique warning"); Dispatcher.UIThread.RunJobs();
         Assert.Single(app.ViewModel.Logs,x => x.Contains("unique warning"));
     }
+    [AvaloniaFact]
+    public async Task FailedProxyShutdownKeepsWindowUsableAndExitCanBeRetried()
+    {
+        var memory = new MemoryProxy { StopError = new TimeoutException("Client cleanup timed out") };
+        var proxy = new TelegramProxyViewModel(memory, new MemoryStore { Value = new TelegramProxyOptions { Secret = new string('1', 32), AutoStart = true } });
+        using var app = new TestApplication(telegramProxy: proxy);
+        await app.Settings.SaveAsync(new DesktopSettings { CheckUpdates = false, CheckConnectionAfterStart = false, MinimizeToTray = false }, TestContext.Current.CancellationToken);
+        var exits = 0;
+        var window = new MainWindow(app.ViewModel, exitApplication: () => exits++);
+        window.Show(); await window.InitializeAsync();
+        try
+        {
+            await window.ExitAsync();
+            Assert.Equal(0, exits);
+            Assert.True(window.IsVisible);
+            Assert.Contains("Client cleanup timed out", app.ViewModel.Message);
+            await app.ViewModel.StartAsync();
+            Assert.Equal(1, app.Process.StartCalls);
+            memory.StopError = null;
+            await window.ExitAsync();
+            Assert.Equal(1, exits);
+            Assert.Equal(TelegramProxyState.Stopped, proxy.Snapshot.State);
+            Assert.Equal(ZapretRunState.Stopped, (await app.Process.GetStatusAsync(TestContext.Current.CancellationToken)).State);
+        }
+        finally { memory.StopError = null; window.Close(); }
+    }
+    [AvaloniaFact]
+    public async Task TelegramLaunchFailureIsReportedWithoutLeakingTheConnectionKey()
+    {
+        var proxy = new TelegramProxyViewModel(new MemoryProxy(), new MemoryStore { Value = new TelegramProxyOptions { Secret = new string('1', 32), AutoStart = true } });
+        await proxy.InitializeAsync();
+        string? feedback = null;
+        proxy.FeedbackReceived += (message, failed) => { if (failed) feedback = message; };
+        proxy.OpenInTelegram(uri => throw new System.ComponentModel.Win32Exception("No handler for " + uri.AbsoluteUri));
+        Assert.Contains("Не удалось открыть Telegram", proxy.Error);
+        Assert.Equal(proxy.Error, feedback);
+        Assert.DoesNotContain(proxy.Draft.Secret, proxy.Error);
+        Assert.True(proxy.CanConnect);
+        Uri? opened = null;
+        proxy.OpenInTelegram(uri => opened = uri);
+        Assert.Equal(proxy.ConnectionUri, opened);
+        Assert.Null(proxy.Error);
+    }
+    [AvaloniaFact]
+    public async Task TelegramUnsavedInputsSurviveBothLayoutBreakpoints()
+    {
+        var proxy = new TelegramProxyViewModel(new MemoryProxy(), new MemoryStore { Value = new TelegramProxyOptions { Secret = new string('1', 32) } });
+        using var app = new TestApplication(telegramProxy: proxy);
+        await app.Settings.SaveAsync(new DesktopSettings { CheckUpdates = false, MinimizeToTray = false }, TestContext.Current.CancellationToken);
+        var window = new MainWindow(app.ViewModel, exitApplication: () => { });
+        window.Show(); await window.InitializeAsync(); window.OpenTelegramProxy();
+        TextBox Field(string name) => window.GetLogicalDescendants().OfType<TextBox>().Single(x => AutomationProperties.GetName(x) == name);
+        CheckBox Option(string text) => window.GetLogicalDescendants().OfType<CheckBox>().Single(x => x.Content as string == text);
+        Expander Settings() => window.GetLogicalDescendants().OfType<Expander>().Single(x => x.Header as string == "Настройки прокси");
+        try
+        {
+            Dispatcher.UIThread.RunJobs(); window.UpdateLayout();
+            Settings().IsExpanded = true;
+            Field("Локальный порт").Text = "unfinished-port";
+            Field("Датацентры Telegram (DC → IP)").Text = "4:149.154.167.91\n2:";
+            Field("Домены CfProxy").Text = "cf.example, unfinished";
+            Field("Домены Worker").Text = "worker.example";
+            Option("Запускать вместе с Zapret Desktop").IsChecked = true;
+            Option("Подробный журнал").IsChecked = true;
+            Option("Резервный маршрут CfProxy").IsChecked = false;
+            Option("HTTP/2 для фото и видео").IsChecked = false;
+            Option("Разрешить прямое TCP-подключение").IsChecked = false;
+            foreach (var width in new[] { 1200, 1099, 1440 })
+            {
+                window.Width = width; Dispatcher.UIThread.RunJobs(); window.UpdateLayout(); Dispatcher.UIThread.RunJobs();
+                Assert.Equal("unfinished-port", Field("Локальный порт").Text);
+                Assert.Equal("4:149.154.167.91\n2:", Field("Датацентры Telegram (DC → IP)").Text);
+                Assert.Equal("cf.example, unfinished", Field("Домены CfProxy").Text);
+                Assert.Equal("worker.example", Field("Домены Worker").Text);
+                Assert.True(Option("Запускать вместе с Zapret Desktop").IsChecked);
+                Assert.True(Option("Подробный журнал").IsChecked);
+                Assert.False(Option("Резервный маршрут CfProxy").IsChecked);
+                Assert.False(Option("HTTP/2 для фото и видео").IsChecked);
+                Assert.False(Option("Разрешить прямое TCP-подключение").IsChecked);
+                Assert.True(Settings().IsExpanded);
+            }
+            Assert.Equal(1443, proxy.Draft.Port);
+            Assert.False(proxy.Draft.AutoStart);
+        }
+        finally { await window.ExitAsync(); window.Close(); }
+    }
     private sealed class MemoryProxy : ITelegramProxy
     {
         public TelegramProxySnapshot Snapshot { get; private set; } = new(TelegramProxyState.Stopped);
         public event Action? Changed;
         public event Action<TelegramProxyDiagnostic>? Diagnostic;
         public TaskCompletionSource? StartPending,StopPending;
+        public Exception? StopError;
         public int StartCalls;
         public void Warn(string message)
         { Snapshot = Snapshot with { ConnectionErrors = 1,LastConnectionError = message,LastConnectionErrorAt = DateTimeOffset.UtcNow }; Diagnostic?.Invoke(new("WARN",message)); Changed?.Invoke(); }
@@ -318,6 +405,7 @@ public sealed class TelegramProxyTests
         }
         public async Task StopAsync(CancellationToken ct = default)
         {
+            if (StopError is not null) throw StopError;
             ct.ThrowIfCancellationRequested(); Snapshot = Snapshot with { State = TelegramProxyState.Stopping }; Changed?.Invoke();
             if (StopPending is not null) await StopPending.Task.WaitAsync(ct);
             Snapshot = Snapshot with { State = TelegramProxyState.Stopped }; Changed?.Invoke();

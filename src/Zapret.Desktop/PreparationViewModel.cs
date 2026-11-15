@@ -19,11 +19,13 @@ public sealed partial class MainViewModel
 
     public void CancelPreparation() => preparationCancellation?.Cancel();
 
-    private Task PrepareAsync<T>(string label, Func<CancellationToken, Task<T>> prepare, Action<T> publish) =>
-        PrepareAsync(label, (_, token) => prepare(token), publish);
+    private Task PrepareAsync<T>(string label, Func<CancellationToken, Task<T>> prepare, Action<T> publish,
+        Func<string?>? previousPlanId = null) =>
+        PrepareAsync(label, (_, token) => prepare(token), publish, previousPlanId);
 
     private async Task PrepareAsync<T>(string label,
-        Func<IProgress<ManagedUpdateProgress>, CancellationToken, Task<T>> prepare, Action<T> publish)
+        Func<IProgress<ManagedUpdateProgress>, CancellationToken, Task<T>> prepare, Action<T> publish,
+        Func<string?>? previousPlanId = null)
     {
         if (Busy || PreparingData || exitRequested)
         {
@@ -58,7 +60,15 @@ public sealed partial class MainViewModel
         {
             // ZIP validation and hashing must not run on the UI thread.
             var result = await Task.Run(() => prepare(progress, cancellation.Token), cancellation.Token);
-            if (!cancellation.IsCancellationRequested && !exitRequested) publish(result);
+            if (cancellation.IsCancellationRequested || exitRequested)
+            {
+                await DiscardPreparedPlanAsync(PreparedPlanId(result));
+                if (!exitRequested) Message = "Подготовка отменена. Установленные файлы не изменены.";
+                return;
+            }
+            var previous = previousPlanId?.Invoke();
+            publish(result);
+            if (previous != PreparedPlanId(result)) await DiscardPreparedPlanAsync(previous);
         }
         catch (OperationCanceledException) when (cancellation.IsCancellationRequested)
         {
@@ -80,6 +90,37 @@ public sealed partial class MainViewModel
             OnPropertyChanged(nameof(PreparationDetail));
             completion.TrySetResult();
         }
+    }
+
+    private static string? PreparedPlanId<T>(T result) => result switch
+    {
+        ManagedUpdatePlan update => update.Id,
+        IpSetUpdatePlan ipset => ipset.Id,
+        HostsUpdatePreview hosts => hosts.Id,
+        _ => null
+    };
+
+    private async Task DiscardPreparedPlanAsync(string? id)
+    {
+        if (id is null || managedUpdates is null) return;
+        try { await managedUpdates.DiscardPreparedAsync(id); }
+        catch (Exception ex)
+        {
+            // A prepared replacement remains usable even if an older workspace is locked.
+            Log("WARN", "Не удалось очистить временные данные подготовки " + id + ": " + ex.Message);
+            if (!exitRequested) Message += " Не удалось удалить прежние временные данные; подробности в журнале.";
+        }
+    }
+
+    private async Task DiscardPendingPreparationsAsync(bool preserveDesktopUpdate)
+    {
+        var ids = new[] { DistributionUpdatePlan?.Id, preserveDesktopUpdate ? null : DesktopUpdatePlan?.Id,
+            IpSetUpdatePlan?.Id, HostsPreview?.Id };
+        foreach (var id in ids.Where(id => id is not null).Distinct()) await DiscardPreparedPlanAsync(id);
+        DistributionUpdatePlan = null;
+        if (!preserveDesktopUpdate) DesktopUpdatePlan = null;
+        IpSetUpdatePlan = null;
+        HostsPreview = null;
     }
 
     private static string FormatProgressDetail(ManagedUpdateProgress progress)

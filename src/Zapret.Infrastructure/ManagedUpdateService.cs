@@ -139,9 +139,33 @@ public sealed class ManagedUpdateService : IManagedUpdateService
         }
     }
 
-    public async Task<ManagedUpdateResult> ApplyDistributionAsync(ManagedUpdatePlan plan, CancellationToken cancellationToken = default)
+    public Task DiscardPreparedAsync(string id, CancellationToken cancellationToken = default) => Task.Run(async () =>
     {
-        await applyLock.WaitAsync(cancellationToken);
+        await applyLock.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            if (updates.TryGetValue(id, out var prepared))
+            {
+                // Scheduled Desktop updates have already transferred ownership to their helper
+                // and are removed from updates while holding the same lock.
+                var workspace = Path.Combine(stagingDirectory, prepared.Plan.Id);
+                UpdateFiles.RequireChild(stagingDirectory, workspace);
+                UpdateFiles.RequireNoLinks(workspace);
+                cancellationToken.ThrowIfCancellationRequested();
+                if (Directory.Exists(workspace)) UpdateFiles.DeleteTree(workspace);
+                updates.TryRemove(id, out _);
+            }
+            ipsets.TryRemove(id, out _);
+            hosts.TryRemove(id, out _);
+        }
+        finally { applyLock.Release(); }
+    }, cancellationToken);
+
+    public Task<ManagedUpdateResult> ApplyDistributionAsync(ManagedUpdatePlan plan, CancellationToken cancellationToken = default) =>
+        Task.Run(async () =>
+    {
+        await applyLock.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
             var prepared = RequirePrepared(plan, ManagedUpdateProduct.Distribution);
@@ -182,11 +206,11 @@ public sealed class ManagedUpdateService : IManagedUpdateService
             return result;
         }
         finally { applyLock.Release(); }
-    }
+    }, cancellationToken);
 
-    public async Task RollbackDistributionAsync(ManagedUpdateResult result, CancellationToken cancellationToken = default)
+    public Task RollbackDistributionAsync(ManagedUpdateResult result, CancellationToken cancellationToken = default) => Task.Run(async () =>
     {
-        await applyLock.WaitAsync(cancellationToken);
+        await applyLock.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
             if (!applied.TryGetValue(result.Id, out var known) || known != result)
@@ -201,7 +225,7 @@ public sealed class ManagedUpdateService : IManagedUpdateService
             applied.TryRemove(result.Id, out _);
         }
         finally { applyLock.Release(); }
-    }
+    }, cancellationToken);
 
     public async Task<DesktopUpdateSchedule> ScheduleDesktopUpdateAsync(ManagedUpdatePlan plan, int currentProcessId,
         CancellationToken cancellationToken = default)
@@ -499,7 +523,7 @@ public sealed class ManagedUpdateService : IManagedUpdateService
         var candidate = new ZapretDistribution(root);
         var missing = candidate.Validate();
         if (missing.Count > 0) throw new InvalidDataException("Incomplete zapret package: " + string.Join(", ", missing));
-        foreach (var binary in new[] { "bin/winws.exe", "bin/WinDivert.dll", "bin/WinDivert64.sys" })
+        foreach (var binary in new[] { "bin/winws.exe", "bin/cygwin1.dll", "bin/WinDivert.dll", "bin/WinDivert64.sys" })
             UpdateFiles.RequirePe(Path.Combine(root, binary));
         var strategies = new BatStrategyProvider(candidate);
         var parsed = await strategies.GetStrategiesAsync(ct);

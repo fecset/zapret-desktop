@@ -2,6 +2,11 @@
 set "LOCAL_VERSION=1.10.4"
 
 :: External commands
+if "%~1"=="get_ipset_status" (
+    call :safe_file_operation ipset-status "%~dp0lists\ipset-all.txt" ""
+    exit /b
+)
+
 if "%~1"=="status_zapret" (
     call :test_service zapret soft
     call :tcp_enable
@@ -599,57 +604,13 @@ if exist "%hostsFile%" (
 :: WinDivert conflict
 tasklist /FI "IMAGENAME eq winws.exe" | find /I "winws.exe" > nul
 set "winws_running=!errorlevel!"
-
 sc query "WinDivert" | findstr /I "RUNNING STOP_PENDING" > nul
 set "windivert_running=!errorlevel!"
-
 if !winws_running! neq 0 if !windivert_running!==0 (
-    call :PrintYellow "[?] winws.exe is not running but WinDivert service is active. Attempting to delete WinDivert..."
-    
-    net stop "WinDivert" >nul 2>&1
-    sc delete "WinDivert" >nul 2>&1
-    sc query "WinDivert" >nul 2>&1
-    if !errorlevel!==0 (
-        call :PrintRed "[X] Failed to delete WinDivert. Checking for conflicting services..."
-        
-        set "conflicting_services=GoodbyeDPI"
-        set "found_conflict=0"
-        
-        for %%s in (!conflicting_services!) do (
-            sc query "%%s" >nul 2>&1
-            if !errorlevel!==0 (
-                call :PrintYellow "[?] Found conflicting service: %%s. Stopping and removing..."
-                net stop "%%s" >nul 2>&1
-                sc delete "%%s" >nul 2>&1
-                if !errorlevel!==0 (
-                    call :PrintGreen "Successfully removed service: %%s"
-                ) else (
-                    call :PrintRed "[X] Failed to remove service: %%s"
-                )
-                set "found_conflict=1"
-            )
-        )
-        
-        if !found_conflict!==0 (
-            call :PrintRed "[X] No conflicting services found. Check manually if any other bypass is using WinDivert."
-        ) else (
-            call :PrintYellow "[?] Attempting to delete WinDivert again..."
-
-            net stop "WinDivert" >nul 2>&1
-            sc delete "WinDivert" >nul 2>&1
-            sc query "WinDivert" >nul 2>&1
-            if !errorlevel! neq 0 (
-                call :PrintGreen "WinDivert successfully deleted after removing conflicting services"
-            ) else (
-                call :PrintRed "[X] WinDivert still cannot be deleted. Check manually if any other bypass is using WinDivert."
-            )
-        )
-    ) else (
-        call :PrintGreen "WinDivert successfully removed"
-    )
-    
-    echo:
+    call :PrintYellow "[?] WinDivert is active without winws.exe. Another application may own the driver."
+    call :PrintYellow "Inspect its owner before stopping or removing it. Diagnostics leaves services unchanged."
 )
+echo:
 
 :: Conflicting bypasses
 set "conflicting_services=GoodbyeDPI discordfix_zapret winws1 winws2"
@@ -669,31 +630,8 @@ for %%s in (!conflicting_services!) do (
 )
 
 if !found_any_conflict!==1 (
-    call :PrintRed "[X] Conflicting bypass services found: !found_conflicts!"
-    
-    set "CHOICE="
-    set /p "CHOICE=Do you want to remove these conflicting services? (Y/N) (default: N) "
-    if "!CHOICE!"=="" set "CHOICE=N"
-    if "!CHOICE!"=="y" set "CHOICE=Y"
-    
-    if /i "!CHOICE!"=="Y" (
-        for %%s in (!found_conflicts!) do (
-            call :PrintYellow "Stopping and removing service: %%s"
-            net stop "%%s" >nul 2>&1
-            sc delete "%%s" >nul 2>&1
-            if !errorlevel!==0 (
-                call :PrintGreen "Successfully removed service: %%s"
-            ) else (
-                call :PrintRed "[X] Failed to remove service: %%s"
-            )
-        )
-
-        net stop "WinDivert" >nul 2>&1
-        sc delete "WinDivert" >nul 2>&1
-        net stop "WinDivert14" >nul 2>&1
-        sc delete "WinDivert14" >nul 2>&1
-    )
-    
+    call :PrintYellow "[?] Other bypass services found: !found_conflicts!"
+    call :PrintYellow "Manage these services in their owning applications. Diagnostics leaves them unchanged."
     echo:
 )
 
@@ -1025,8 +963,7 @@ if not defined source_file (
     goto replace_active_fakes_prompt
 )
 
-del /f /q "!active_file!" >nul 2>&1
-copy /y "!source_file!" "!active_file!" >nul
+call :safe_file_operation replace-payload "!active_file!" "!source_file!"
 if errorlevel 1 (
     echo Failed to replace the active fake file.
 ) else (
@@ -1044,20 +981,8 @@ goto replace_active_fakes_prompt
 :: IPSET SWITCH =======================
 :ipset_switch_status
 chcp 437 > nul
-
-set "listFile=%~dp0lists\ipset-all.txt"
-for /f %%i in ('type "%listFile%" 2^>nul ^| find /c /v ""') do set "lineCount=%%i"
-
-if !lineCount!==0 (
-    set "IPsetStatus=any"
-) else (
-    findstr /C:"203.0.113.113/32" "%listFile%" >nul
-    if !errorlevel!==0 (
-        set "IPsetStatus=none"
-    ) else (
-        set "IPsetStatus=loaded"
-    )
-)
+set "IPsetStatus=none"
+for /f "delims=" %%M in ('call "%~f0" get_ipset_status') do set "IPsetStatus=%%M"
 exit /b
 
 
@@ -1117,24 +1042,13 @@ set "url=https://raw.githubusercontent.com/Flowseal/zapret-discord-youtube/refs/
 
 echo Updating ipset-all...
 
-if exist "%SystemRoot%\System32\curl.exe" (
-    curl --version | find "libcurl/7"
-    if !errorlevel!==0 (
-        curl --ssl-no-revoke -L -f -o "%listFile%" "%url%"
-    ) else (
-        curl --ssl-revoke-best-effort -L -f -o "%listFile%" "%url%"
-    )
-) else (
-    powershell -NoProfile -Command ^
-        "$url = '%url%';" ^
-        "$out = '%listFile%';" ^
-        "$dir = Split-Path -Parent $out;" ^
-        "if (-not (Test-Path $dir)) { New-Item -ItemType Directory -Path $dir | Out-Null };" ^
-        "$res = Invoke-WebRequest -Uri $url -TimeoutSec 10 -UseBasicParsing;" ^
-        "if ($res.StatusCode -eq 200) { $res.Content | Out-File -FilePath $out -Encoding UTF8 } else { exit 1 }"
+call :safe_file_operation update-ipset "%listFile%" "%url%"
+if errorlevel 1 (
+    call :PrintRed "IPSet update failed. The previous list was kept."
+    pause
+    goto menu
 )
-
-echo Finished
+echo IPSet updated successfully. Previous list saved as ipset-all.update.backup.
 
 pause
 goto menu
@@ -1309,3 +1223,187 @@ if "%extracted%"=="0" (
     exit
 )
 exit /b 0
+
+
+:: File changes run in one PowerShell process, with values passed as data through the environment.
+:safe_file_operation
+setlocal DisableDelayedExpansion
+set "ZAPRET_LEGACY_OPERATION=%~1"
+set "ZAPRET_LEGACY_TARGET=%~2"
+set "ZAPRET_LEGACY_SOURCE=%~3"
+set "ZAPRET_LEGACY_SCRIPT=%~f0"
+powershell -NoProfile -ExecutionPolicy Bypass -Command "$text = [IO.File]::ReadAllText($env:ZAPRET_LEGACY_SCRIPT); $match = [regex]::Match($text, '(?ms)^# BEGIN ZAPRET SAFE FILE OPERATIONS\r?\n(.*?)^# END ZAPRET SAFE FILE OPERATIONS'); if (-not $match.Success) { [Console]::Error.WriteLine('File operation helper is missing.'); exit 1 }; & ([scriptblock]::Create($match.Groups[1].Value))"
+set "operationResult=%errorlevel%"
+endlocal & exit /b %operationResult%
+
+# BEGIN ZAPRET SAFE FILE OPERATIONS
+$ErrorActionPreference = 'Stop'
+$distributionRoot = [IO.Path]::GetDirectoryName([IO.Path]::GetFullPath($env:ZAPRET_LEGACY_SCRIPT))
+$maximumFileBytes = 16 * 1024 * 1024
+
+function Assert-ManagedFile {
+    param([string]$Root, [string]$Path)
+    $fullRoot = [IO.Path]::GetFullPath($Root).TrimEnd([IO.Path]::DirectorySeparatorChar)
+    $full = [IO.Path]::GetFullPath($Path)
+    if (-not $full.StartsWith($fullRoot + [IO.Path]::DirectorySeparatorChar, [StringComparison]::OrdinalIgnoreCase)) {
+        throw 'File path is outside its managed directory.'
+    }
+    for ($current = $full; $current; $current = [IO.Path]::GetDirectoryName($current)) {
+        if (([IO.File]::Exists($current) -or [IO.Directory]::Exists($current)) -and
+            (([IO.File]::GetAttributes($current) -band [IO.FileAttributes]::ReparsePoint) -ne 0)) {
+            throw 'Linked files and directories are not allowed.'
+        }
+    }
+    if ([IO.Directory]::Exists($full)) { throw 'Expected a file, found a directory.' }
+    return $full
+}
+
+function Commit-StagedFile {
+    param([string]$Stage, [string]$Target, [string]$Root)
+    $null = Assert-ManagedFile $Root $Stage
+    $null = Assert-ManagedFile $Root $Target
+    # Windows PowerShell 5.1 coerces $null to an empty string for this overload.
+    # NullString passes an actual null backup path to File.Replace.
+    if ([IO.File]::Exists($Target)) { [IO.File]::Replace($Stage, $Target, [NullString]::Value) }
+    else { [IO.File]::Move($Stage, $Target) }
+}
+
+function Copy-FileAtomically {
+    param([string]$Source, [string]$Target, [string]$Root, [switch]$OnlyIfMissing)
+    $null = Assert-ManagedFile $Root $Target
+    if ($OnlyIfMissing -and [IO.File]::Exists($Target)) { return }
+    $null = [IO.Directory]::CreateDirectory([IO.Path]::GetDirectoryName($Target))
+    $null = Assert-ManagedFile $Root $Target
+    $stage = $Target + '.' + [Guid]::NewGuid().ToString('N') + '.tmp'
+    try {
+        [IO.File]::Copy($Source, $stage, $false)
+        if (([IO.FileInfo]$stage).Length -gt $maximumFileBytes) { throw 'File exceeds the 16 MiB limit.' }
+        if ($OnlyIfMissing) { [IO.File]::Move($stage, $Target) }
+        else { Commit-StagedFile $stage $Target $Root }
+    } finally {
+        if ([IO.File]::Exists($stage)) { [IO.File]::Delete($stage) }
+    }
+}
+
+function Get-ZapretDataRoot {
+    return [IO.Path]::Combine([Environment]::GetFolderPath([Environment+SpecialFolder]::LocalApplicationData), 'ZapretDesktop')
+}
+
+function Get-IpSetMode {
+    param([string]$Path)
+    if (-not [IO.File]::Exists($Path)) { return 'none' }
+    $entries = @([IO.File]::ReadAllLines($Path) | ForEach-Object {
+        ($_ -split '#', 2)[0].Trim().TrimStart([char]0xFEFF)
+    } | Where-Object { $_.Length -gt 0 })
+    if ($entries.Count -eq 0) { return 'any' }
+    if ($entries.Count -eq 1 -and $entries[0] -ceq '203.0.113.113/32') { return 'none' }
+    return 'loaded'
+}
+
+function Receive-IpSetDownload {
+    param([string]$Url, [string]$Destination)
+    $request = [Net.HttpWebRequest]::Create($Url)
+    $request.Timeout = 15000
+    $request.ReadWriteTimeout = 15000
+    $request.UserAgent = 'ZapretDesktop-Legacy/1.0'
+    $response = $request.GetResponse()
+    try {
+        if ([int]$response.StatusCode -ne 200 -or $response.ContentLength -gt $maximumFileBytes) {
+            throw 'IPSet download returned an invalid response or exceeded the size limit.'
+        }
+        $inputStream = $response.GetResponseStream()
+        try {
+            $outputStream = [IO.File]::Open($Destination, [IO.FileMode]::CreateNew, [IO.FileAccess]::Write, [IO.FileShare]::None)
+            try {
+                $buffer = New-Object byte[] 65536
+                $received = 0L
+                $timer = [Diagnostics.Stopwatch]::StartNew()
+                while (($count = $inputStream.Read($buffer, 0, $buffer.Length)) -gt 0) {
+                    $received += $count
+                    if ($received -gt $maximumFileBytes -or $timer.Elapsed.TotalSeconds -gt 60) {
+                        throw 'IPSet download exceeded its size or time limit.'
+                    }
+                    $outputStream.Write($buffer, 0, $count)
+                }
+                if ($response.ContentLength -ge 0 -and $received -ne $response.ContentLength) {
+                    throw 'IPSet download was incomplete.'
+                }
+            } finally { $outputStream.Dispose() }
+        } finally { $inputStream.Dispose() }
+    } finally { $response.Dispose() }
+}
+
+function Assert-ValidIpSet {
+    param([string]$Path)
+    if (([IO.FileInfo]$Path).Length -gt $maximumFileBytes) { throw 'IPSet exceeds the 16 MiB limit.' }
+    $encoding = New-Object Text.UTF8Encoding($false, $true)
+    $entries = 0
+    foreach ($line in [IO.File]::ReadAllLines($Path, $encoding)) {
+        $entry = ($line -split '#', 2)[0].Trim().TrimStart([char]0xFEFF)
+        if (-not $entry) { continue }
+        $parts = $entry.Split('/')
+        $address = $null
+        if ($parts.Length -gt 2 -or $parts[0] -notmatch '^[0-9a-fA-F:.]+$' -or
+            -not [Net.IPAddress]::TryParse($parts[0], [ref]$address)) { throw 'Downloaded IPSet contains an invalid IP address.' }
+        if ($parts.Length -eq 2) {
+            $prefix = 0
+            $maxPrefix = if ($address.AddressFamily -eq [Net.Sockets.AddressFamily]::InterNetwork) { 32 } else { 128 }
+            if ($parts[1] -notmatch '^\d+$' -or -not [int]::TryParse($parts[1], [ref]$prefix) -or $prefix -gt $maxPrefix) {
+                throw 'Downloaded IPSet contains an invalid prefix.'
+            }
+        }
+        $entries++
+    }
+    if ($entries -eq 0) { throw 'Downloaded IPSet contains no IP addresses.' }
+}
+
+# Execute the selected file operation. Tests replace only the downloader/data-root functions above.
+try {
+    $target = Assert-ManagedFile $distributionRoot $env:ZAPRET_LEGACY_TARGET
+    switch ($env:ZAPRET_LEGACY_OPERATION) {
+        'ipset-status' { Get-IpSetMode $target }
+        'update-ipset' {
+            $expected = [IO.Path]::Combine($distributionRoot, 'lists', 'ipset-all.txt')
+            if (-not $target.Equals($expected, [StringComparison]::OrdinalIgnoreCase)) { throw 'Unknown IPSet target.' }
+            $stage = $target + '.' + [Guid]::NewGuid().ToString('N') + '.tmp'
+            try {
+                Receive-IpSetDownload $env:ZAPRET_LEGACY_SOURCE $stage
+                Assert-ValidIpSet $stage
+                if ([IO.File]::Exists($target)) {
+                    Copy-FileAtomically $target ([IO.Path]::Combine([IO.Path]::GetDirectoryName($target), 'ipset-all.update.backup')) $distributionRoot
+                }
+                Commit-StagedFile $stage $target $distributionRoot
+            } finally {
+                if ([IO.File]::Exists($stage)) { [IO.File]::Delete($stage) }
+            }
+        }
+        'replace-payload' {
+            $bin = [IO.Path]::Combine($distributionRoot, 'bin')
+            $name = [IO.Path]::GetFileName($target)
+            if ([IO.Path]::GetDirectoryName($target) -ne $bin -or $name -notin @('ACTIVE_DISCORD_UDP.bin', 'ACTIVE_GAME_UDP.bin')) {
+                throw 'Unknown active payload.'
+            }
+            $source = Assert-ManagedFile $distributionRoot $env:ZAPRET_LEGACY_SOURCE
+            if ([IO.Path]::GetDirectoryName($source) -ne $bin -or [IO.Path]::GetExtension($source) -ne '.bin' -or
+                [IO.Path]::GetFileName($source).StartsWith('ACTIVE_', [StringComparison]::OrdinalIgnoreCase) -or
+                -not [IO.File]::Exists($source) -or ([IO.FileInfo]$source).Length -gt $maximumFileBytes) {
+                throw 'Unknown source payload or file too large.'
+            }
+            if ([IO.File]::Exists($target)) {
+                $dataRoot = Get-ZapretDataRoot
+                $sha256 = [Security.Cryptography.SHA256]::Create()
+                try { $identity = ([BitConverter]::ToString($sha256.ComputeHash([Text.Encoding]::UTF8.GetBytes($distributionRoot.ToUpperInvariant())))).Replace('-', '') }
+                finally { $sha256.Dispose() }
+                $original = [IO.Path]::Combine($dataRoot, 'payload-originals', $identity, $name)
+                Copy-FileAtomically $target $original $dataRoot -OnlyIfMissing
+            }
+            Copy-FileAtomically $source $target $distributionRoot
+        }
+        default { throw 'Unknown file operation.' }
+    }
+    exit 0
+} catch {
+    [Console]::Error.WriteLine('[ERROR] ' + $_.Exception.Message)
+    exit 1
+}
+# END ZAPRET SAFE FILE OPERATIONS

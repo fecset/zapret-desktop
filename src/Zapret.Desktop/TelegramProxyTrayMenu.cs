@@ -15,7 +15,7 @@ public sealed class TelegramProxyTrayMenu : IDisposable
         this.vm = vm; Menu.Items.Add(Status); Menu.Items.Add(Toggle); Menu.Items.Add(Connect);
         var options = new NativeMenuItem { Header = "Настройки Telegram прокси" }; options.Click += (_, _) => settings(); Menu.Items.Add(options);
         Toggle.Click += async (_, _) => { if (vm.CanStop) await vm.StopAsync(); else await vm.StartAsync(); };
-        Connect.Click += (_, _) => { if (vm.CanConnect) open(vm.ConnectionUri); };
+        Connect.Click += (_, _) => vm.OpenInTelegram(open);
         vm.PropertyChanged += Changed; Refresh();
     }
     private void Changed(object? sender, PropertyChangedEventArgs e) => Dispatcher.UIThread.Post(Refresh);

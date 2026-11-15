@@ -254,7 +254,7 @@ public sealed partial class MainViewModel
     {
         DistributionUpdatePlan = plan;
         Message = "Обновление zapret загружено и проверено. Теперь его можно установить.";
-    });
+    }, previousPlanId: () => DistributionUpdatePlan?.Id);
     public async Task UpdateDistributionAsync()
     {
         if (DistributionUpdatePlan is null)
@@ -370,6 +370,8 @@ public sealed partial class MainViewModel
         await Required(managedUpdates).RollbackDistributionAsync(result);
         LastDistributionUpdate = null;
         await ReloadUserDataAsync();
+        if (await service.GetStatusAsync() != "NotInstalled")
+            await RefreshServiceStrategyAsync();
         if (UpstreamUpdate is not null)
             UpstreamUpdate = UpstreamUpdate with
             {
@@ -383,7 +385,7 @@ public sealed partial class MainViewModel
     {
         DesktopUpdatePlan = plan;
         Message = "Обновление Desktop загружено и проверено. Установка выполняется после выхода.";
-    });
+    }, previousPlanId: () => DesktopUpdatePlan?.Id);
     public async Task<bool> InstallDesktopUpdateForExitAsync()
     {
         if (DesktopUpdatePlan is null || Busy || PreparingData)
@@ -391,7 +393,7 @@ public sealed partial class MainViewModel
             Message = "Сначала загрузите обновление и дождитесь завершения текущей операции.";
             return false;
         }
-        if (!await StopOwnedForExitAsync()) return false;
+        if (!await StopOwnedForExitAsync(preserveDesktopUpdate: true)) return false;
         try
         {
             var state = await process.GetStatusAsync();
@@ -420,7 +422,8 @@ public sealed partial class MainViewModel
         return await InstallDesktopUpdateForExitAsync();
     }
     public Task PrepareIpSetUpdateAsync() => PrepareAsync("Загружаем список IP-адресов.",
-        token => Required(managedUpdates).PrepareIpSetAsync(token), plan => IpSetUpdatePlan = plan);
+        token => Required(managedUpdates).PrepareIpSetAsync(token), plan => IpSetUpdatePlan = plan,
+        previousPlanId: () => IpSetUpdatePlan?.Id);
     public Task ApplyIpSetUpdateAsync() => RunAsync(async () =>
     {
         await RequireStoppedForFilesAsync();
@@ -437,7 +440,7 @@ public sealed partial class MainViewModel
         HostsPreview = preview;
         HostsUpdateResult = null;
         Message = preview.HasChanges ? "Предпросмотр готов. Файл hosts ещё не изменён." : "Изменений нет: hosts уже содержит эти адреса.";
-    });
+    }, previousPlanId: () => HostsPreview?.Id);
     public Task ApplyHostsAsync() => RunAsync(async () =>
     {
         var preview = HostsPreview ?? throw new InvalidOperationException("Сначала просмотрите изменения hosts.");

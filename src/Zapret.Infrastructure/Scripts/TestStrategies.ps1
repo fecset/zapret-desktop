@@ -1,6 +1,7 @@
 param([switch]$DesktopMode, [string]$DistributionRoot)
 
 $hasErrors = $false
+$script:TestExitCode = 0
 
 $rootDir = if ($DistributionRoot) { $DistributionRoot } else { Split-Path $PSScriptRoot }
 $listsDir = Join-Path $rootDir "lists"
@@ -11,10 +12,12 @@ if (-not (Test-Path $resultsDir)) { New-Item -ItemType Directory -Path $resultsD
 # Define functions early
 function Get-IpsetStatus {
     $listFile = Join-Path $listsDir "ipset-all.txt"
-    if (-not (Test-Path $listFile)) { return "none" }
-    $raw = [IO.File]::ReadAllText($listFile)
-    if ([string]::IsNullOrWhiteSpace($raw)) { return "any" }
-    if ($raw -match '203\.0\.113\.113/32') { return "none" }
+    if (-not (Test-Path -LiteralPath $listFile)) { return "none" }
+    $entries = @([IO.File]::ReadAllLines($listFile) | ForEach-Object {
+        ($_ -split '#', 2)[0].Trim().TrimStart([char]0xFEFF)
+    } | Where-Object { $_.Length -gt 0 })
+    if ($entries.Count -eq 0) { return "any" }
+    if ($entries.Count -eq 1 -and $entries[0] -ceq '203.0.113.113/32') { return "none" }
     return "loaded"
 }
 
@@ -79,13 +82,22 @@ function Wait-AnyKey {
     }
 }
 
+function Report-TestFailure {
+    param($Failure)
+    $script:TestExitCode = 1
+    $message = if ($Failure -is [System.Management.Automation.ErrorRecord]) { $Failure.Exception.Message } else { [string]$Failure }
+    Write-Host ("[ERROR] " + $message) -ForegroundColor Red
+    [Console]::Error.WriteLine($message)
+}
+
 trap {
-    Write-Host "[ERROR] Script interrupted. Restoring ipset..." -ForegroundColor Red
-    if ($originalIpsetStatus -and $originalIpsetStatus -ne "any") {
-        Set-IpsetMode -mode "restore"
-    }
+    Report-TestFailure $_
+    try {
+        $flag = Join-Path $rootDir 'ipset_switched.flag'
+        if (Test-Path -LiteralPath $flag) { Set-IpsetMode -mode 'restore' }
+    } catch { Report-TestFailure $_ }
     Wait-AnyKey
-    break
+    exit 1
 }
 
 function New-OrderedDict { New-Object System.Collections.Specialized.OrderedDictionary }
@@ -118,18 +130,24 @@ function Convert-Target {
 }
 
 # DPI checker defaults (override via MONITOR_* env vars like in monitor.ps1)
-$dpiTimeoutSeconds = 5
-$dpiRangeBytes = 65536
+function Get-TestPositiveInteger {
+    param([string]$Name, [int]$Default, [int]$Maximum)
+    $value = [Environment]::GetEnvironmentVariable($Name)
+    if ([string]::IsNullOrWhiteSpace($value)) { return $Default }
+    $parsed = 0
+    if (-not [int]::TryParse($value, [ref]$parsed) -or $parsed -lt 1 -or $parsed -gt $Maximum) {
+        throw "$Name must be an integer from 1 to $Maximum."
+    }
+    return $parsed
+}
+
 $defaultMaxParallel = [Math]::Min(16, [Math]::Max(8, [Environment]::ProcessorCount * 2))
-$dpiMaxParallel = $defaultMaxParallel
 $dpiCustomHost = $env:MONITOR_HOST
-if ($env:MONITOR_TIMEOUT) { [int]$dpiTimeoutSeconds = $env:MONITOR_TIMEOUT }
-if ($env:MONITOR_RANGE) { [int]$dpiRangeBytes = $env:MONITOR_RANGE }
-if ($env:MONITOR_MAX_PARALLEL) { [int]$dpiMaxParallel = $env:MONITOR_MAX_PARALLEL }
-$standardCurlTimeout = 4
-$standardMaxParallel = $defaultMaxParallel
-if ($env:TEST_CURL_TIMEOUT) { [int]$standardCurlTimeout = $env:TEST_CURL_TIMEOUT }
-if ($env:TEST_MAX_PARALLEL) { [int]$standardMaxParallel = $env:TEST_MAX_PARALLEL }
+$dpiTimeoutSeconds = Get-TestPositiveInteger 'MONITOR_TIMEOUT' 5 300
+$dpiRangeBytes = Get-TestPositiveInteger 'MONITOR_RANGE' 65536 16777216
+$dpiMaxParallel = Get-TestPositiveInteger 'MONITOR_MAX_PARALLEL' $defaultMaxParallel 64
+$standardCurlTimeout = Get-TestPositiveInteger 'TEST_CURL_TIMEOUT' 4 300
+$standardMaxParallel = Get-TestPositiveInteger 'TEST_MAX_PARALLEL' $defaultMaxParallel 64
 
 function Get-DpiSuite {
     # Suite sourced from https://github.com/hyperion-cs/dpi-checkers (Apache-2.0 license)
@@ -384,7 +402,7 @@ if (-not (Get-Command "curl.exe" -ErrorAction SilentlyContinue)) {
 
 # Check for leftover ipset flag from previous interrupted run
 $ipsetFlagFile = Join-Path $rootDir "ipset_switched.flag"
-if (Test-Path $ipsetFlagFile) {
+if (Test-Path -LiteralPath $ipsetFlagFile) {
     Write-Host "[INFO] Detected leftover ipset switch flag. Restoring ipset..." -ForegroundColor Yellow
     Set-IpsetMode -mode "restore"
 }
@@ -1042,19 +1060,26 @@ try {
     Write-Host "Results saved to $resultFile" -ForegroundColor Green
 
 } catch {
-    Write-Host "[ERROR] An error occurred during tests. Restoring ipset..." -ForegroundColor Red
-    if ($originalIpsetStatus -and $originalIpsetStatus -ne "any") {
-        Set-IpsetMode -mode "restore"
-    }
+    Report-TestFailure $_
 } finally {
-    Stop-Zapret
-    Restore-WinwsSnapshot -snapshot $originalWinws
-    if ($originalIpsetStatus -ne "any") {
-        Write-Host "[INFO] Restoring original ipset mode..." -ForegroundColor DarkGray
-        Set-IpsetMode -mode "restore"
+    # Restore files before restarting a previous process so it reads the original IPSet.
+    $engineStopped = $false
+    $ipsetRestored = $false
+    try { Stop-Zapret; $engineStopped = $true } catch { Report-TestFailure $_ }
+    try {
+        if (Test-Path -LiteralPath $ipsetFlagFile) {
+            Write-Host "[INFO] Restoring original ipset mode..." -ForegroundColor DarkGray
+            Set-IpsetMode -mode "restore"
+        }
+        $ipsetRestored = $true
+    } catch { Report-TestFailure $_ }
+    if ($engineStopped -and $ipsetRestored) {
+        try { Restore-WinwsSnapshot -snapshot $originalWinws } catch { Report-TestFailure $_ }
+    } else {
+        Write-Host '[WARNING] Previous processes were not restarted because cleanup failed.' -ForegroundColor Yellow
     }
 }
 
     Wait-AnyKey
-    exit
+    exit $script:TestExitCode
 }

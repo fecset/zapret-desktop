@@ -371,7 +371,7 @@ public sealed class EngineeringDashboardTests
     {
         // Distribution checks are real file checks against this fixture's temporary directory.
         Directory.CreateDirectory(app.Distribution.BinDirectory);
-        foreach (var file in new[] { "winws.exe", "WinDivert.dll", "WinDivert64.sys" })
+        foreach (var file in new[] { "winws.exe", "WinDivert.dll", "WinDivert64.sys", "cygwin1.dll" })
             File.WriteAllText(Path.Combine(app.Distribution.BinDirectory, file), "UI test fixture, never executable");
         File.WriteAllText(Path.Combine(app.Distribution.Root, "service.bat"), "set LOCAL_VERSION=1.10.4");
         File.WriteAllText(Path.Combine(app.Distribution.ListsDirectory, "list-general.txt"), "example.test\n");

@@ -12,6 +12,10 @@ namespace Zapret.Desktop;
 
 public sealed partial class MainWindow
 {
+    private string? listFileSelection;
+    private string listQueryDraft = "";
+    private string listEntryDraft = "";
+
     private void BuildLists()
     {
         Heading("Списки", "Просматривайте и редактируйте домены и IP-адреса в файлах zapret.");
@@ -25,8 +29,11 @@ public sealed partial class MainWindow
         tools.Children.Add(Text("Выберите файл", 16, FontWeight.SemiBold));
         var searchRow = new WrapPanel { Orientation = Orientation.Horizontal, ItemSpacing = 8, LineSpacing = 8 };
         var files = Dropdown(vm.ListFiles,
+            vm.ListFiles.FirstOrDefault(name => name.Equals(listFileSelection, StringComparison.OrdinalIgnoreCase)) ??
             vm.ListFiles.FirstOrDefault(name => name.Equals("list-general.txt", StringComparison.OrdinalIgnoreCase)) ?? vm.ListFiles[0], 235);
-        var query = Input("Найти домен или IP-адрес", 245);
+        AutomationProperties.SetAutomationId(files, "ListFile");
+        var query = Input("Найти домен или IP-адрес", 245); query.Text = listQueryDraft;
+        AutomationProperties.SetAutomationId(query, "ListQuery");
         var shown = Text("", 13, color: MutedBrush);
         string SelectedFile() => files.SelectedItem as string ?? vm.ListFiles[0];
         async Task LoadAsync()
@@ -52,7 +59,8 @@ public sealed partial class MainWindow
         var editTitle = Text("Добавить домен", 16, FontWeight.SemiBold);
         edit.Children.Add(editTitle);
         edit.Children.Add(Text("Чтобы удалить запись, выберите строку в списке ниже. Изменения вступят в силу после перезапуска Zapret.", 13, color: MutedBrush));
-        var entry = Input("Например, example.com", 280);
+        var entry = Input("Например, example.com", 280); entry.Text = listEntryDraft;
+        AutomationProperties.SetAutomationId(entry, "ListEntry");
         var entries = new ListBox { ItemsSource = vm.ListLines,
             Background = SurfaceBrush, Foreground = TextBrush };
         var editRow = new WrapPanel { Orientation = Orientation.Horizontal, ItemSpacing = 8, LineSpacing = 8 };
@@ -100,6 +108,12 @@ public sealed partial class MainWindow
             if (entries.SelectedItem is string selected) entry.Text = selected.Trim();
         };
         UpdateEditor();
+        capturePageDraft = () =>
+        {
+            listFileSelection = SelectedFile();
+            listQueryDraft = query.Text ?? "";
+            listEntryDraft = entry.Text ?? "";
+        };
         FillRemainingHeight(Panel(restricted
             ? Text("Содержимое списка временно скрыто. Оно загрузится автоматически после завершения или отмены автоподбора.", 13, color: MutedBrush)
             : entries, 8));

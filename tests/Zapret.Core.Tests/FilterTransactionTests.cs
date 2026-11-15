@@ -5,6 +5,47 @@ namespace Zapret.Core.Tests;
 
 public sealed class FilterTransactionTests
 {
+    [Theory]
+    [InlineData("", IpSetMode.Any)]
+    [InlineData("\uFEFF  \r\n# 203.0.113.113/32 is a placeholder\n", IpSetMode.Any)]
+    [InlineData("203.0.113.113/32\n", IpSetMode.None)]
+    [InlineData("\uFEFF # comment\r\n 203.0.113.113/32 # disabled\r\n", IpSetMode.None)]
+    [InlineData("203.0.113.113/32\n1.2.3.0/24\n", IpSetMode.Loaded)]
+    [InlineData("# 203.0.113.113/32\n1.2.3.0/24\n", IpSetMode.Loaded)]
+    public async Task IpSetModeUsesEffectiveEntriesRatherThanSentinelSubstrings(string content, IpSetMode expected)
+    {
+        var root = Path.Combine(Path.GetTempPath(), "Zapret-ipset-mode-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(Path.Combine(root, "lists"));
+        try
+        {
+            await File.WriteAllTextAsync(Path.Combine(root, "lists", "ipset-all.txt"), content);
+            Assert.Equal(expected, await new FilterService(new ZapretDistribution(root)).GetIpSetModeAsync());
+        }
+        finally { Directory.Delete(root, recursive: true); }
+    }
+
+    [Theory]
+    [InlineData("203.0.113.113/32\n1.2.3.0/24\n")]
+    [InlineData("# 203.0.113.113/32\n1.2.3.0/24\n")]
+    public async Task SwitchingMixedIpSetToAnyAndBackPreservesAllAddresses(string content)
+    {
+        var root = Path.Combine(Path.GetTempPath(), "Zapret-ipset-preserve-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(Path.Combine(root, "lists"));
+        var file = Path.Combine(root, "lists", "ipset-all.txt");
+        try
+        {
+            await File.WriteAllTextAsync(file, content);
+            var filters = new FilterService(new ZapretDistribution(root));
+            await filters.SetIpSetModeAsync(IpSetMode.Any);
+            Assert.Equal(content, await File.ReadAllTextAsync(file + ".backup"));
+            Assert.Equal(IpSetMode.Any, await filters.GetIpSetModeAsync());
+            await filters.SetIpSetModeAsync(IpSetMode.Loaded);
+            Assert.Equal(content, await File.ReadAllTextAsync(file));
+            Assert.Equal(IpSetMode.Loaded, await filters.GetIpSetModeAsync());
+        }
+        finally { Directory.Delete(root, recursive: true); }
+    }
+
     [Fact]
     public async Task FailedGameFilterWriteRestoresIpSetAndDoesNotLeaveANewBackup()
     {

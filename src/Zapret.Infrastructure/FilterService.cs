@@ -75,8 +75,17 @@ public sealed class FilterService(IZapretDistribution distribution) : IFilterSer
     {
         if (!File.Exists(IpSetFile)) return IpSetMode.None;
         var text = await File.ReadAllTextAsync(IpSetFile, cancellationToken);
-        if (string.IsNullOrWhiteSpace(text)) return IpSetMode.Any;
-        return text.Contains("203.0.113.113/32", StringComparison.Ordinal) ? IpSetMode.None : IpSetMode.Loaded;
+        using var reader = new StringReader(text);
+        var placeholder = false;
+        while (reader.ReadLine() is { } line)
+        {
+            var comment = line.IndexOf('#');
+            var entry = (comment < 0 ? line : line[..comment]).Trim().TrimStart('\uFEFF');
+            if (entry.Length == 0) continue;
+            if (placeholder || entry != "203.0.113.113/32") return IpSetMode.Loaded;
+            placeholder = true;
+        }
+        return placeholder ? IpSetMode.None : IpSetMode.Any;
     }
     public async Task SetIpSetModeAsync(IpSetMode mode, CancellationToken cancellationToken = default)
     {

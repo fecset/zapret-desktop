@@ -109,5 +109,16 @@ public sealed class TelegramProxyViewModel : ObservableObject
         if (active is not null) { await server.RestartAsync(active); running = active; }
         Refresh();
     }, () => "Ключ Telegram прокси обновлён. Подключите Telegram заново.", "Обновляем ключ Telegram прокси…");
+    public void OpenInTelegram(Action<Uri> open)
+    {
+        if (!CanConnect) return;
+        try { open(ConnectionUri); Error = null; }
+        catch (Exception ex)
+        {
+            // Shell errors must not expose the connection URI, which contains the secret.
+            Error = "Не удалось открыть Telegram. Проверьте установку Telegram Desktop и обработчик ссылок tg:// (" + ex.GetType().Name + ").";
+            FeedbackReceived?.Invoke(Error, true);
+        }
+    }
     public async Task ShutdownAsync() { await gate.WaitAsync(); try { await server.StopAsync(); running = null; Refresh(); } finally { gate.Release(); } }
 }

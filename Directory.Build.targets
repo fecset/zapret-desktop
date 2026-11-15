@@ -1,0 +1,10 @@
+<Project>
+  <!-- Preview uses one output folder for the app and test host, so filter all referenced projects. -->
+  <Target Name="ExcludeNativeDebugSymbolsFromUiPreview" AfterTargets="ResolvePackageAssets" Condition="'$(UiPreview)' == 'true'">
+    <ItemGroup>
+      <!-- Native runtime PDBs are not covered by CopyDebugSymbolFilesFromPackages. -->
+      <NativeCopyLocalItems Remove="@(NativeCopyLocalItems)" Condition="'%(NativeCopyLocalItems.Extension)' == '.pdb'" />
+      <RuntimeTargetsCopyLocalItems Remove="@(RuntimeTargetsCopyLocalItems)" Condition="'%(RuntimeTargetsCopyLocalItems.Extension)' == '.pdb'" />
+    </ItemGroup>
+  </Target>
+</Project>

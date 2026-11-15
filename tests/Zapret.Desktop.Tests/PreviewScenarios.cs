@@ -86,7 +86,7 @@ internal sealed class PreviewSession : IAsyncDisposable
             var fixture = session.Fixture;
             Directory.CreateDirectory(fixture.Distribution.BinDirectory);
             if (config.Engine != PreviewEngine.MissingFiles)
-                foreach (var file in new[] { "winws.exe", "WinDivert.dll", "WinDivert64.sys" })
+                foreach (var file in new[] { "winws.exe", "WinDivert.dll", "WinDivert64.sys", "cygwin1.dll" })
                     File.WriteAllText(Path.Combine(fixture.Distribution.BinDirectory, file), "UI preview, never executable");
             File.WriteAllText(Path.Combine(fixture.Distribution.Root, "service.bat"), "set LOCAL_VERSION=1.10.4");
             File.WriteAllText(Path.Combine(fixture.Distribution.ListsDirectory, "list-general.txt"), "example.test\n");

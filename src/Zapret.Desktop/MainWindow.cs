@@ -65,6 +65,7 @@ public sealed partial class MainWindow : Window
     private bool exitAllowed;
     private bool exitInProgress;
     private Task? initialization;
+    private Action? capturePageDraft;
     private string? payloadSourceSelection;
     private readonly HashSet<string> expandedConnectionDetails = new(StringComparer.OrdinalIgnoreCase);
     private bool compact;
@@ -185,6 +186,13 @@ public sealed partial class MainWindow : Window
             if (vm.TelegramProxy is not null) await vm.TelegramProxy.ShutdownAsync();
             exitAllowed = true;
             CompleteExit();
+        }
+        catch (Exception ex)
+        {
+            exitAllowed = false;
+            vm.ResumeAfterFailedExit(ex);
+            Show();
+            Activate();
         }
         finally { exitInProgress = false; }
     }
@@ -571,6 +579,8 @@ public sealed partial class MainWindow : Window
 
     private void DetachPage()
     {
+        capturePageDraft?.Invoke();
+        capturePageDraft = null;
         if (fillLayout is not null)
         {
             fillLayout.Children.Remove(page);
